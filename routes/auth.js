@@ -468,19 +468,17 @@ router.post('/forgot-password', [
       subject: '🔐 Chatterbox - Your Password Reset Code', 
       html 
     });
-    
-    console.log(`📧 Email sent successfully to ${email}:`, emailResult);
-    console.log(`📧 Email provider: ${emailResult.provider}`);
-    console.log(`📧 Email ID: ${emailResult.id}`);
-    
+
+    console.log(`📧 Email send attempted to ${email}:`, emailResult);
+
     res.json({ 
       success: true, 
       message: 'Password reset code sent to email',
       data: { 
         email, 
         codeGenerated: true,
-        emailProvider: emailResult.provider,
-        emailId: emailResult.id
+        emailProvider: emailResult?.provider || 'mailersend',
+        emailId: emailResult?.id || null
       }
     });
   } catch (error) {

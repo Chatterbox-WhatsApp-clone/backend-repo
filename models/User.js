@@ -11,6 +11,7 @@ const userSchema = new mongoose.Schema(
 			minlength: [3, "Username must be at least 3 characters long"],
 			maxlength: [20, "Username cannot exceed 20 characters"],
 		},
+
 		email: {
 			type: String,
 			required: [true, "Email is required"],
@@ -22,47 +23,66 @@ const userSchema = new mongoose.Schema(
 				"Please enter a valid email",
 			],
 		},
+
 		password: {
 			type: String,
 			required: [true, "Password is required"],
 			minlength: [6, "Password must be at least 6 characters long"],
 		},
-		profilePicture: {
-			type: String,
-			default: null,
-		},
-		status: {
-			type: String,
-			default: "Hey there. I'm using chatterbox!",
-			maxlength: [100, "Status cannot exceed 100 characters"],
-		},
-		isActive: { type: Boolean, default: true },
-		isOnline: { type: Boolean, default: false },
-		lastSeen: { type: Date, default: Date.now },
-		phoneNumber: {
-			type: String,
-			unique: true,
-			sparse: true,
-			match: [/^\+?[\d\s-()]+$/, "Please enter a valid phone number"],
-		},
-		contacts: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
-		blockedUsers: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
-		isVerified: { type: Boolean, default: false },
-		verificationToken: String,
-		resetPasswordToken: String,
-		resetPasswordExpires: Date,
-		signedUpWithGoogle: { type: Boolean, default: false },
-		authProvider: { type: String, enum: ["local", "google"], default: "local" },
-		phoneVerified: { type: Boolean, default: false },
-		phoneVerificationCode: String,
-		phoneVerificationExpires: Date,
-	},
-	{
-		timestamps: true,
-	}
-);
 
-// Indexes for better performance
+		profilePicture: { type: String, default: null },
+
+		backgroundImage: {
+			type: String,
+			default: "",
+			trim: true,
+		},
+
+		bio: {
+			type: String,
+			default: "Hey there! I'm using Chatterbox",
+			maxlength: [500, "Bio cannot exceed 500 characters"],
+		},
+
+		dateJoined: {
+			type: String,
+			default: () => {
+				const now = new Date();
+				return now.toLocaleDateString("en-US", {
+					year: "numeric",
+					month: "long",
+					day: "numeric",
+				});
+			},
+		},
+
+		contacts: [
+			{ type: mongoose.Schema.Types.ObjectId, ref: "User", default: [] },
+		],
+
+		blockedUsers: [
+			{ type: mongoose.Schema.Types.ObjectId, ref: "User", default: [] },
+		],
+
+		status: { type: String, default: "Hey there! I'm using Chatterbox." },
+
+		isOnline: { type: Boolean, default: false },
+
+		lastSeen: { type: Date, default: Date.now },
+
+		phoneNumber: { type: String, default: null },
+
+		isVerified: { type: Boolean, default: false },
+
+		signedUpWithGoogle: { type: Boolean, default: false },
+
+		authProvider: { type: String, default: "email" },
+
+		phoneVerified: { type: Boolean, default: false },
+	},
+	{ timestamps: true }
+);
+// Indexes
 userSchema.index({ email: 1 });
 userSchema.index({ username: 1 });
 userSchema.index({ phoneNumber: 1 });
@@ -84,7 +104,7 @@ userSchema.methods.comparePassword = async function (candidatePassword) {
 	return await bcrypt.compare(candidatePassword, this.password);
 };
 
-// Virtuals for counts
+// Virtuals
 userSchema.virtual("totalContacts").get(function () {
 	return this.contacts ? this.contacts.length : 0;
 });
@@ -93,7 +113,11 @@ userSchema.virtual("totalBlocked").get(function () {
 	return this.blockedUsers ? this.blockedUsers.length : 0;
 });
 
-// Method to get public profile with counts and populated lists
+userSchema.virtual("fullName").get(function () {
+	return this.username;
+});
+
+// Full profile method
 userSchema.methods.getFullProfile = async function () {
 	const user = await this.populate([
 		{ path: "contacts", select: "username profilePicture" },
@@ -105,6 +129,9 @@ userSchema.methods.getFullProfile = async function () {
 		username: user.username,
 		email: user.email,
 		profilePicture: user.profilePicture,
+		backgroundImage: user.backgroundImage,
+		bio: user.bio,
+		dateJoined: user.dateJoined, // ✅ uses formatted string from DB
 		status: user.status,
 		isOnline: user.isOnline,
 		lastSeen: user.lastSeen,
@@ -121,12 +148,7 @@ userSchema.methods.getFullProfile = async function () {
 	};
 };
 
-// Virtual for full name
-userSchema.virtual("fullName").get(function () {
-	return this.username;
-});
-
-// Ensure virtual fields are serialized
+// Ensure virtuals are serialized
 userSchema.set("toJSON", {
 	virtuals: true,
 	transform: function (doc, ret) {
@@ -137,13 +159,10 @@ userSchema.set("toJSON", {
 	},
 });
 
-module.exports = mongoose.model("User", userSchema);
-
-// Block a user
+// Block / Unblock / Check / Online status methods
 userSchema.methods.blockUser = async function (userIdToBlock) {
 	if (!this.blockedUsers.includes(userIdToBlock)) {
 		this.blockedUsers.push(userIdToBlock);
-		// also remove them from contacts if present
 		this.contacts = this.contacts.filter(
 			(contactId) => contactId.toString() !== userIdToBlock.toString()
 		);
@@ -152,7 +171,6 @@ userSchema.methods.blockUser = async function (userIdToBlock) {
 	return this;
 };
 
-// Unblock a user
 userSchema.methods.unblockUser = async function (userIdToUnblock) {
 	this.blockedUsers = this.blockedUsers.filter(
 		(id) => id.toString() !== userIdToUnblock.toString()
@@ -161,21 +179,20 @@ userSchema.methods.unblockUser = async function (userIdToUnblock) {
 	return this;
 };
 
-// Check if a user is blocked
 userSchema.methods.isBlocked = function (userId) {
 	return this.blockedUsers.some((id) => id.toString() === userId.toString());
 };
 
-// Mark user as online
 userSchema.methods.setOnline = async function () {
 	this.isOnline = true;
 	this.lastSeen = new Date();
 	await this.save();
 };
 
-// Mark user as offline
 userSchema.methods.setOffline = async function () {
 	this.isOnline = false;
 	this.lastSeen = new Date();
 	await this.save();
 };
+
+module.exports = mongoose.model("User", userSchema);

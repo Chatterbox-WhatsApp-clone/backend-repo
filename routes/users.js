@@ -6,6 +6,53 @@ const { sendEmail, buildCodeEmailTemplate } = require("../utils/email");
 const FriendRequest = require("../models/FriendRequest");
 const router = express.Router();
 
+const multer = require("multer");
+const path = require("path");
+const fs = require("fs");
+
+// Profile picture directory
+const profilePicDir = path.join(__dirname, "../uploads/profilePics");
+if (!fs.existsSync(profilePicDir))
+	fs.mkdirSync(profilePicDir, { recursive: true });
+
+// Background image directory
+const backgroundDir = path.join(__dirname, "../uploads/backgrounds");
+if (!fs.existsSync(backgroundDir))
+	fs.mkdirSync(backgroundDir, { recursive: true });
+
+// Dynamic storage
+const storage = multer.diskStorage({
+	destination: function (req, file, cb) {
+		if (file.fieldname === "profilePicture") {
+			cb(null, profilePicDir);
+		} else if (file.fieldname === "backgroundImage") {
+			cb(null, backgroundDir);
+		} else {
+			cb(new Error("Unknown field"), false);
+		}
+	},
+	filename: function (req, file, cb) {
+		const ext = path.extname(file.originalname);
+		const uniqueName = Date.now() + "-" + Math.round(Math.random() * 1e9) + ext;
+		cb(null, uniqueName);
+	},
+});
+
+const upload = multer({
+	storage,
+	limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+	fileFilter: (req, file, cb) => {
+		if (!file.mimetype.startsWith("image/")) {
+			cb(new Error("Only image files allowed!"), false);
+		} else {
+			cb(null, true);
+		}
+	},
+});
+
+module.exports = upload;
+
+
 /**
  * @swagger
  * /api/users:
@@ -131,7 +178,7 @@ router.get("/me", authenticateToken, async (req, res) => {
  * @swagger
  * /api/users/profile:
  *   put:
- *     summary: Update user profile
+ *     summary: Update user profile (supports background image upload)
  *     tags:
  *       - Users
  *     security:
@@ -139,7 +186,7 @@ router.get("/me", authenticateToken, async (req, res) => {
  *     requestBody:
  *       required: true
  *       content:
- *         application/json:
+ *         multipart/form-data:
  *           schema:
  *             type: object
  *             properties:
@@ -155,53 +202,21 @@ router.get("/me", authenticateToken, async (req, res) => {
  *                 minLength: 6
  *               profilePicture:
  *                 type: string
- *                 format: url
+ *                 format: binary
+ *               backgroundImage:
+ *                 type: string
+ *                 format: binary
+ *                 description: Upload a background image file
  *               email:
  *                 type: string
  *                 format: email
  *               phoneNumber:
  *                 type: string
- *                 description: User phone number
- *               access_token:
+ *               bio:
  *                 type: string
- *                 description: Optional token for authentication or third-party integration
  *     responses:
  *       200:
  *         description: Profile updated successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                 message:
- *                   type: string
- *                 data:
- *                   type: object
- *                   properties:
- *                     userId:
- *                       type: string
- *                     id:
- *                       type: string
- *                     username:
- *                       type: string
- *                     status:
- *                       type: string
- *                     profilePicture:
- *                       type: string
- *                     email:
- *                       type: string
- *                       format: email
- *                     phoneNumber:
- *                       type: string
- *                     isOnline:
- *                       type: boolean
- *                     lastSeen:
- *                       type: string
- *                     access_token:
- *                       type: string
- *                       description: Optional token for authentication or third-party integration
  *       400:
  *         description: Invalid request or username taken
  *       401:
@@ -209,78 +224,149 @@ router.get("/me", authenticateToken, async (req, res) => {
  *       500:
  *         description: Internal server error
  */
-// @route   PUT /api/users/profile
-// @desc    Update user profile
-// @access  Private
+
 router.put(
 	"/profile",
 	authenticateToken,
-	[
-		body("username")
-			.optional()
-			.isLength({ min: 3, max: 20 })
-			.withMessage("Username must be between 3 and 20 characters"),
-		body("status")
-			.optional()
-			.isLength({ max: 100 })
-			.withMessage("Status cannot exceed 100 characters"),
-		body("password")
-			.optional()
-			.isLength({ min: 6 })
-			.withMessage("Password must be at least 6 characters"),
-		body("profilePicture")
-			.optional()
-			.isURL()
-			.withMessage("Profile picture must be a valid URL"),
-		body("email").optional().isEmail().withMessage("Email must be valid"),
-		body("phoneNumber")
-			.optional()
-			.isMobilePhone()
-			.withMessage("Phone number must be valid"),
-	],
+	upload.fields([
+		{ name: "profilePicture", maxCount: 1 },
+		{ name: "backgroundImage", maxCount: 1 },
+	]),
 	async (req, res) => {
 		try {
-			const errors = validationResult(req);
-			if (!errors.isEmpty()) {
-				return res.status(400).json({
-					success: false,
-					errors: errors.array(),
-				});
-			}
 			const user = await User.findById(req.user._id).exec();
+
+			if (req.body.username) user.username = req.body.username;
 			if (req.body.status) user.status = req.body.status;
 			if (req.body.password) user.password = req.body.password;
-			if (req.body.profilePicture)
-				user.profilePicture = req.body.profilePicture;
 			if (req.body.email) user.email = req.body.email;
 			if (req.body.phoneNumber) user.phoneNumber = req.body.phoneNumber;
+			if (req.body.bio) user.bio = req.body.bio;
+
+			// ✅ handle image uploads
+			if (req.files?.profilePicture?.[0]) {
+				user.profilePicture = `/uploads/profilePics/${req.files.profilePicture[0].filename}`;
+			}
+
+			if (req.files?.backgroundImage?.[0]) {
+				user.backgroundImage = `/uploads/profilePics/${req.files.backgroundImage[0].filename}`;
+			}
 
 			await user.save();
+
 			res.json({
 				success: true,
-				message: `Profile updated`,
+				message: "Profile updated",
 				data: {
 					userId: user._id.toString(),
-					id: user._id.toString(),
 					username: user.username,
 					status: user.status,
+					bio: user.bio,
 					profilePicture: user.profilePicture,
+					backgroundImage: user.backgroundImage,
 					email: user.email,
 					phoneNumber: user.phoneNumber,
 					isOnline: user.isOnline,
 					lastSeen: user.lastSeen,
-					...(req.body.access_token
-						? { access_token: req.body.access_token }
-						: {}),
+					dateJoined: user.dateJoined,
 				},
 			});
 		} catch (error) {
 			console.error("Update profile error:", error);
+
+			if (error.code === 11000) {
+				const field = Object.keys(error.keyPattern)[0];
+				let message =
+					field === "username"
+						? "Username is already taken"
+						: field === "email"
+						? "Email is already in use"
+						: field === "phoneNumber"
+						? "Phone number is already in use"
+						: `${field} already exists`;
+
+				return res.status(400).json({ success: false, message });
+			}
+
 			res.status(500).json({
 				success: false,
 				message: "Internal server error",
 			});
 		}
+	}
+);
+
+/**
+ * @swagger
+ * /api/users/background-image:
+ *   post:
+ *     summary: Upload or update user background image
+ *     tags:
+ *       - Users
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               backgroundImage:
+ *                 type: string
+ *                 format: binary
+ *                 description: The new background image file
+ *     responses:
+ *       200:
+ *         description: Background image updated successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 backgroundImage:
+ *                   type: string
+ *                   example: "/uploads/backgrounds/1697219045123-123456789.png"
+ *       400:
+ *         description: No file uploaded or invalid file
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: false
+ *                 message:
+ *                   type: string
+ *                   example: "No file uploaded"
+ *       401:
+ *         description: Unauthorized, missing or invalid token
+ *       500:
+ *         description: Internal server error
+ */
+router.post(
+	"/background-image",
+	authenticateToken,
+	upload.single("backgroundImage"),
+	async (req, res) => {
+		if (!req.file) {
+			return res
+				.status(400)
+				.json({ success: false, message: "No file uploaded" });
+		}
+
+		const user = await User.findById(req.user._id);
+		user.backgroundImage = `/uploads/backgrounds/${req.file.filename}`;
+		await user.save();
+
+		res.json({
+			success: true,
+			backgroundImage: user.backgroundImage,
+		});
 	}
 );
 
@@ -339,7 +425,8 @@ router.post("/phone/verify/send-code", authenticateToken, async (req, res) => {
 		});
 		res.json({
 			success: true,
-			message: "Verification code sent to your email",
+			message:
+				"Verification code sent to your email. Please Check your junk folder",
 		});
 	} catch (error) {
 		console.error("Send phone verification code error:", error);
@@ -567,34 +654,6 @@ router.get("/online", authenticateToken, async (req, res) => {
  *       401:
  *         description: Unauthorized
  */
-const multer = require("multer");
-const path = require("path");
-const fs = require("fs");
-const profilePicDir = path.join(__dirname, "../uploads/profilePics");
-if (!fs.existsSync(profilePicDir)) {
-	fs.mkdirSync(profilePicDir, { recursive: true });
-}
-const storage = multer.diskStorage({
-	destination: function (req, file, cb) {
-		cb(null, profilePicDir);
-	},
-	filename: function (req, file, cb) {
-		const ext = path.extname(file.originalname);
-		const uniqueName = Date.now() + "-" + Math.round(Math.random() * 1e9) + ext;
-		cb(null, uniqueName);
-	},
-});
-const upload = multer({
-	storage,
-	limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
-	fileFilter: (req, file, cb) => {
-		if (!file.mimetype.startsWith("image/")) {
-			cb(new Error("Only image files allowed!"), false);
-		} else {
-			cb(null, true);
-		}
-	},
-});
 router.post(
 	"/profile-picture",
 	authenticateToken,
@@ -642,7 +701,6 @@ router.post(
  *       500:
  *         description: Internal server error
  */
-
 
 router.delete("/profile-picture", authenticateToken, async (req, res) => {
 	try {

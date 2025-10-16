@@ -2,6 +2,8 @@
 
 A complete, production-ready backend for **CHATTERBOX, a WhatsApp clone application built with Node.js, Express, MongoDB, and Socket.IO.
 
+Change domain on email service
+
 ## 🚀 Features
 
 - **User Authentication**: Register, login, JWT tokens
