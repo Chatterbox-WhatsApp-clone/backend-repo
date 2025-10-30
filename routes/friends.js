@@ -10,9 +10,8 @@ const tempUnfriendSchema = new mongoose.Schema({
 	friend: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
 	expiresAt: { type: Date, required: true },
 });
-
-// Optional: auto-remove expired entries
 tempUnfriendSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+module.exports = mongoose.model("TempUnfriend", tempUnfriendSchema);
 
 const TempUnfriend = mongoose.model("TempUnfriend", tempUnfriendSchema);
 
@@ -20,7 +19,7 @@ const TempUnfriend = mongoose.model("TempUnfriend", tempUnfriendSchema);
  * @swagger
  * /api/friends:
  *   get:
- *     summary: Get your accepted friends
+ *     summary: Get your accepted friends and Non mutual friends of your friend
  *     tags:
  *       - Friends
  *     security:
@@ -47,96 +46,271 @@ const TempUnfriend = mongoose.model("TempUnfriend", tempUnfriendSchema);
  *       401:
  *         description: Unauthorized
  */
+// router.get("/", authenticateToken, async (req, res) => {
+// 	try {
+// 		const userObjectId = new mongoose.Types.ObjectId(req.user._id);
+
+// 		// Temporarily unfriended users
+// 		const tempUnfriends = await TempUnfriend.find({
+// 			$or: [{ user: userObjectId }, { friend: userObjectId }],
+// 		});
+// 		const tempUnfriendIds = tempUnfriends.map((t) =>
+// 			t.user.toString() === userObjectId.toString()
+// 				? t.friend.toString()
+// 				: t.user.toString()
+// 		);
+
+// 		// All accepted friend requests for the current user
+// 		const requests = await FriendRequest.find({
+// 			$or: [
+// 				{ sender: userObjectId, status: "accepted" },
+// 				{ receiver: userObjectId, status: "accepted" },
+// 			],
+// 		})
+// 			.populate("sender", "-password -blockedUsers -signedUpWithGoogle")
+// 			.populate("receiver", "-password -blockedUsers -signedUpWithGoogle");
+
+// 		const validRequests = requests.filter((r) => r.sender && r.receiver);
+
+// 		// Current friends IDs (excluding temp unfriends)
+// 		const myFriendIds = validRequests.map((r) =>
+// 			r.sender._id.toString() === userObjectId.toString()
+// 				? r.receiver._id.toString()
+// 				: r.sender._id.toString()
+// 		);
+// 		const filteredFriendIds = myFriendIds.filter(
+// 			(id) => !tempUnfriendIds.includes(id)
+// 		);
+
+// 		// Build full friend objects with recent + nonmutual per friend
+// 		const friends = [];
+
+// 		const oneWeekAgo = new Date();
+// 		oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+
+// 		for (const r of validRequests) {
+// 			const isSender = r.sender._id.toString() === userObjectId.toString();
+// 			const friend = isSender ? r.receiver : r.sender;
+
+// 			if (!friend || tempUnfriendIds.includes(friend._id.toString())) continue;
+
+// 			// Get that friend's accepted friends
+// 			const friendRequests = await FriendRequest.find({
+// 				$or: [
+// 					{ sender: friend._id, status: "accepted" },
+// 					{ receiver: friend._id, status: "accepted" },
+// 				],
+// 			})
+// 				.populate("sender", "username profilePicture _id createdAt")
+// 				.populate(
+// 					"receiver",
+// 					"username profilePicture _id createdAt updatedAt"
+// 				);
+
+// 			const nonMutualSet = new Set();
+// 			const nonMutualFriends = [];
+// 			const recentFriends = [];
+
+// 			for (const fr of friendRequests) {
+// 				if (!fr.sender || !fr.receiver) continue;
+
+// 				const isFriendSender =
+// 					fr.sender._id.toString() === friend._id.toString();
+// 				const innerFriend = isFriendSender ? fr.receiver : fr.sender;
+// 				const innerFriendId = innerFriend._id.toString();
+
+// 				// Skip yourself + your current friends
+// 				if (
+// 					innerFriendId === userObjectId.toString() ||
+// 					filteredFriendIds.includes(innerFriendId)
+// 				)
+// 					continue;
+
+// 				// Non-mutuals
+// 				if (!nonMutualSet.has(innerFriendId)) {
+// 					nonMutualSet.add(innerFriendId);
+// 					nonMutualFriends.push(innerFriend);
+// 				}
+
+// 				// Recently added (within 7 days)
+// 				if (fr.updatedAt && fr.updatedAt >= oneWeekAgo) {
+// 					recentFriends.push(innerFriend);
+// 				}
+// 			}
+
+// 			friends.push({
+// 				...friend.toObject(),
+// 				nonMutualFriends,
+// 				recentFriends,
+// 			});
+// 		}
+
+// 		return res.json({
+// 			success: true,
+// 			friends, // each friend has its own nonMutualFriends and recentFriends
+// 		});
+// 	} catch (error) {
+// 		console.error("Get friends error:", error);
+// 		return res
+// 			.status(500)
+// 			.json({ success: false, message: "Internal server error" });
+// 	}
+// });
 router.get("/", authenticateToken, async (req, res) => {
 	try {
 		const userObjectId = new mongoose.Types.ObjectId(req.user._id);
 
-		// Step 1: find all accepted friend requests for the current user
+		// 1️⃣ Fetch current user and block relationships
+		const currentUser = await User.findById(userObjectId)
+			.select("blockedUsers blockedBy")
+			.lean();
+
+		const blockedIds = [
+			...(currentUser.blockedUsers || []),
+			...(currentUser.blockedBy || []),
+		].map((id) => id.toString());
+
+		// 2️⃣ Temporarily unfriended users
+		const tempUnfriends = await TempUnfriend.find({
+			$or: [{ user: userObjectId }, { friend: userObjectId }],
+		});
+
+		const tempUnfriendIds = tempUnfriends.map((t) =>
+			t.user.toString() === userObjectId.toString()
+				? t.friend.toString()
+				: t.user.toString()
+		);
+
+		// 3️⃣ Find all accepted friend requests for this user
 		const requests = await FriendRequest.find({
 			$or: [
 				{ sender: userObjectId, status: "accepted" },
 				{ receiver: userObjectId, status: "accepted" },
 			],
 		})
-			.populate("sender", "-password -blockedUsers -signedUpWithGoogle")
-			.populate("receiver", "-password -blockedUsers -signedUpWithGoogle");
+			.populate(
+				"sender",
+				"-password -blockedUsers -blockedBy -signedUpWithGoogle"
+			)
+			.populate(
+				"receiver",
+				"-password -blockedUsers -blockedBy -signedUpWithGoogle"
+			);
 
 		const validRequests = requests.filter((r) => r.sender && r.receiver);
 
-		// Get all your current friend IDs
+		// 4️⃣ Your friend IDs (excluding blocked or temp unfriended)
 		const myFriendIds = validRequests.map((r) =>
 			r.sender._id.toString() === userObjectId.toString()
 				? r.receiver._id.toString()
 				: r.sender._id.toString()
 		);
 
-		// Get the timestamp for 1 week ago
+		const filteredFriendIds = myFriendIds.filter(
+			(id) => !tempUnfriendIds.includes(id) && !blockedIds.includes(id)
+		);
+
+		// 5️⃣ Date limit for recent friends
 		const oneWeekAgo = new Date();
 		oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
 
-		// Step 2: build friend list
-		const friends = await Promise.all(
-			validRequests.map(async (r) => {
-				const isSender = r.sender._id.toString() === userObjectId.toString();
-				const friend = isSender ? r.receiver : r.sender;
-				if (!friend) return null;
+		// 6️⃣ All friend requests (to track pending or accepted)
+		const myRequests = await FriendRequest.find({
+			$or: [{ sender: userObjectId }, { receiver: userObjectId }],
+		});
 
-				// Step 3: get that friend's accepted friends
-				const friendRequests = await FriendRequest.find({
-					$or: [
-						{ sender: friend._id, status: "accepted" },
-						{ receiver: friend._id, status: "accepted" },
-					],
-				})
-					.populate("sender", "username profilePicture _id createdAt")
-					.populate("receiver", "username profilePicture _id createdAt");
-
-				// Step 4a: extract non-mutual friends
-				const nonMutualFriends = friendRequests
-					.map((fr) => {
-						if (!fr.sender || !fr.receiver) return null;
-						const isFriendSender =
-							fr.sender._id.toString() === friend._id.toString();
-						const innerFriend = isFriendSender ? fr.receiver : fr.sender;
-						const innerFriendId = innerFriend._id.toString();
-
-						if (
-							innerFriendId === userObjectId.toString() || // exclude you
-							myFriendIds.includes(innerFriendId) // exclude mutual friends
-						)
-							return null;
-
-						return innerFriend;
-					})
-					.filter(Boolean);
-
-				// Step 4b: recently added friends in the last 7 days
-				const recentFriends = friendRequests
-					.map((fr) => {
-						if (!fr.sender || !fr.receiver) return null;
-						const isFriendSender =
-							fr.sender._id.toString() === friend._id.toString();
-						const innerFriend = isFriendSender ? fr.receiver : fr.sender;
-
-						// Only include if createdAt is within last week
-						if (fr.createdAt >= oneWeekAgo) return innerFriend;
-						return null;
-					})
-					.filter(Boolean);
-
-				return {
-					...friend.toObject(),
-					nonMutualFriends,
-					recentFriends,
-				};
-			})
+		const myPendingOrAcceptedIds = new Set(
+			myRequests.flatMap((req) => [
+				req.sender.toString(),
+				req.receiver.toString(),
+			])
 		);
 
-		const cleanFriends = friends.filter(Boolean);
+		const friends = [];
 
-		return res.json({ success: true, friends: cleanFriends });
+		// 7️⃣ Loop through valid friends
+		for (const r of validRequests) {
+			if (!r.sender || !r.receiver) continue;
+
+			const isSender = r.sender._id.toString() === userObjectId.toString();
+			const friend = isSender ? r.receiver : r.sender;
+
+			// Skip temp unfriended or blocked users
+			if (
+				tempUnfriendIds.includes(friend._id.toString()) ||
+				blockedIds.includes(friend._id.toString())
+			)
+				continue;
+
+			// 8️⃣ Fetch this friend’s own friends
+			const friendRequests = await FriendRequest.find({
+				$or: [
+					{ sender: friend._id, status: "accepted" },
+					{ receiver: friend._id, status: "accepted" },
+				],
+			})
+				.populate("sender", "username profilePicture _id createdAt updatedAt")
+				.populate(
+					"receiver",
+					"username profilePicture _id createdAt updatedAt"
+				);
+
+			const nonMutualSet = new Set();
+			const nonMutualFriends = [];
+			const recentFriends = [];
+
+			for (const fr of friendRequests) {
+				if (!fr.sender || !fr.receiver) continue;
+
+				const isFriendSender =
+					fr.sender._id.toString() === friend._id.toString();
+				const innerFriend = isFriendSender ? fr.receiver : fr.sender;
+				const innerFriendId = innerFriend._id.toString();
+
+				// 🚫 Skip yourself, blocked, or current friends
+				if (
+					innerFriendId === userObjectId.toString() ||
+					filteredFriendIds.includes(innerFriendId) ||
+					blockedIds.includes(innerFriendId)
+				)
+					continue;
+
+				// 🚫 Skip users already in pending/accepted state
+				if (myPendingOrAcceptedIds.has(innerFriendId)) continue;
+
+				// ✅ Non-mutual friends
+				if (!nonMutualSet.has(innerFriendId)) {
+					nonMutualSet.add(innerFriendId);
+					nonMutualFriends.push({
+						...innerFriend.toObject(),
+						status: "not_friends",
+					});
+				}
+
+				// ✅ Recently added (within 7 days)
+				if (fr.updatedAt && fr.updatedAt >= oneWeekAgo) {
+					recentFriends.push({
+						...innerFriend.toObject(),
+						status: "accepted",
+					});
+				}
+			}
+
+			friends.push({
+				...friend.toObject(),
+				status: "accepted",
+				nonMutualFriends,
+				recentFriends,
+			});
+		}
+
+		// ✅ Return clean list
+		return res.json({
+			success: true,
+			friends,
+		});
 	} catch (error) {
-		console.error("Get friends error:", error);
+		console.error("Friends error:", error);
 		return res
 			.status(500)
 			.json({ success: false, message: "Internal server error" });
@@ -218,7 +392,6 @@ router.get("/available", authenticateToken, async (req, res) => {
 		const { page = 1, limit = 20 } = req.query;
 		const pageInt = parseInt(page);
 		const limitInt = parseInt(limit);
-
 		const now = new Date();
 
 		// Fetch all friend requests (pending or accepted)
@@ -242,9 +415,24 @@ router.get("/available", authenticateToken, async (req, res) => {
 		}).select("friend");
 		const tempRemovedIds = tempRemoved.map((t) => t.friend.toString());
 
-		const finalExcludedIds = [...excludedUserIds, ...tempRemovedIds];
+		// Fetch current user's block data
+		const currentUser = await User.findById(req.user._id).select(
+			"blockedUsers blockedBy"
+		);
 
-		// Fetch all users excluding self, friends, and temp-removed
+		const blockedIds = [
+			...currentUser.blockedUsers.map((id) => id.toString()),
+			...currentUser.blockedBy.map((id) => id.toString()),
+		];
+
+		// Combine all excluded IDs
+		const finalExcludedIds = [
+			...excludedUserIds,
+			...tempRemovedIds,
+			...blockedIds,
+		];
+
+		// Fetch all users excluding self, friends, blocked, and temp-removed
 		let users = await User.find({
 			_id: { $nin: finalExcludedIds },
 			isActive: true,
@@ -272,7 +460,6 @@ router.get("/available", authenticateToken, async (req, res) => {
 					if (nowMs - sentTime <= PENDING_TIMEOUT) {
 						status = "pending"; // show pending for 30 secs
 					} else {
-						// more than 30 secs, treat as already excluded
 						status = "not sent";
 					}
 				}
@@ -469,37 +656,42 @@ router.post("/accept", authenticateToken, async (req, res) => {
 		const { requestId } = req.body || {};
 
 		if (!requestId || !mongoose.Types.ObjectId.isValid(String(requestId))) {
-			return res
-				.status(400)
-				.json({ success: false, message: "Invalid requestId" });
+			return res.status(400).json({
+				success: false,
+				message: "Invalid requestId",
+			});
 		}
 
 		const request = await FriendRequest.findById(requestId);
 		if (!request || request.receiver.toString() !== req.user._id.toString()) {
-			return res
-				.status(404)
-				.json({ success: false, message: "Request not found or not yours" });
+			return res.status(404).json({
+				success: false,
+				message: "Request not found or not yours",
+			});
 		}
 
 		if (request.status !== "pending") {
-			return res
-				.status(400)
-				.json({ success: false, message: "Request is not pending" });
+			return res.status(400).json({
+				success: false,
+				message: "Request is not pending",
+			});
 		}
 
-		// Mark request as accepted
+		// ✅ Mark as accepted
 		request.status = "accepted";
-		request.friendsSince = new Date
+		request.friendsSince = new Date();
 		await request.save();
 
-		// Add each user to the other's contacts
+		// ✅ Add each user to each other's contacts (without overwriting)
 		await Promise.all([
-			User.findByIdAndUpdate(request.sender, {
-				$addToSet: { contacts: request.receiver },
-			}),
-			User.findByIdAndUpdate(request.receiver, {
-				$addToSet: { contacts: request.sender },
-			}),
+			User.updateOne(
+				{ _id: request.sender },
+				{ $addToSet: { contacts: request.receiver } }
+			),
+			User.updateOne(
+				{ _id: request.receiver },
+				{ $addToSet: { contacts: request.sender } }
+			),
 		]);
 
 		return res.json({
@@ -573,66 +765,6 @@ router.post("/reject", authenticateToken, async (req, res) => {
 
 /**
  * @swagger
- * /block/{userId}:
- *   post:
- *     summary: Block a user
- *     description: Blocks a user so they cannot see you or message you
- *     tags: [Friends]
- *     parameters:
- *       - in: path
- *         name: userId
- *         schema:
- *           type: string
- *         required: true
- *         description: The ID of the user to block
- *     responses:
- *       200:
- *         description: User blocked successfully
- *       400:
- *         description: Bad request (e.g., trying to block yourself)
- *       500:
- *         description: Server error
- */
-
-// POST /block/:userId
-router.post("/block/:userId", authenticateToken, async (req, res) => {
-	try {
-		const userId = req.user._id; // logged-in user
-		const blockedUserId = req.params.userId;
-
-		if (userId === blockedUserId) {
-			return res
-				.status(400)
-				.json({ success: false, message: "You cannot block yourself" });
-		}
-
-		// Add blocked user to current user's blocked list
-		const user = await User.findById(userId);
-		if (!user.blockedUsers.includes(blockedUserId)) {
-			user.blockedUsers.push(blockedUserId);
-			await user.save();
-		}
-
-		// Optionally, remove them from friends
-		await FriendRequest.deleteMany({
-			$or: [
-				{ sender: userId, receiver: blockedUserId },
-				{ sender: blockedUserId, receiver: userId },
-			],
-			status: "accepted",
-		});
-
-		return res
-			.status(200)
-			.json({ success: true, message: "User blocked successfully" });
-	} catch (err) {
-		console.error(err);
-		return res.status(500).json({ success: false, message: "Server error" });
-	}
-});
-
-/**
- * @swagger
  * /friends/search:
  *   get:
  *     summary: Search friends by name
@@ -671,9 +803,7 @@ router.post("/block/:userId", authenticateToken, async (req, res) => {
  *       500:
  *         description: Server error
  */
-
-// GET /friends/search?name=John
-router.get("/friends/search", authenticateToken, async (req, res) => {
+router.get("/search", authenticateToken, async (req, res) => {
 	try {
 		const userId = req.user._id;
 		const { name } = req.query;
@@ -684,25 +814,47 @@ router.get("/friends/search", authenticateToken, async (req, res) => {
 				.json({ success: false, message: "Name query is required" });
 		}
 
-		// Get accepted friends
+		// 1️⃣ Find all accepted friends of the user
 		const friends = await FriendRequest.find({
 			status: "accepted",
 			$or: [{ sender: userId }, { receiver: userId }],
 		});
 
 		const friendIds = friends.map((f) =>
-			f.sender.toString() === userId ? f.receiver : f.sender
+			f.sender.toString() === userId.toString() ? f.receiver : f.sender
 		);
 
-		// Search friends by name
-		const matchedFriends = await User.find({
-			_id: { $in: friendIds },
-			name: { $regex: name, $options: "i" }, // case-insensitive search
-		}).select("name email");
+		// 2️⃣ Get blocked users
+		const currentUser = await User.findById(userId).select("blockedUsers");
+		const blockedUserIds =
+			currentUser?.blockedUsers?.map((id) => id.toString()) || [];
 
-		res.status(200).json({ success: true, friends: matchedFriends });
+		// 3️⃣ Create one regex to match the full string (case-insensitive)
+		const regex = new RegExp(name, "i");
+
+		// 4️⃣ Find friends whose name OR username contains the search string
+		const matchedFriends = await User.find({
+			_id: {
+				$in: friendIds.filter((id) => !blockedUserIds.includes(id.toString())),
+			},
+			$or: [{ name: regex }, { username: regex }],
+		}).select("-password -tokens -__v -blockedUsers -blockedBy");
+
+		if (!matchedFriends.length) {
+			return res.status(200).json({
+				success: true,
+				friends: [],
+				message: "No friends found matching your search.",
+			});
+		}
+
+		res.status(200).json({
+			success: true,
+			friends: matchedFriends,
+			message: "Matching friends found.",
+		});
 	} catch (err) {
-		console.error(err);
+		console.error("Friend search error:", err);
 		res.status(500).json({ success: false, message: "Server error" });
 	}
 });
@@ -812,26 +964,33 @@ router.get("/online", authenticateToken, async (req, res) => {
 	try {
 		const currentUserId = req.user._id;
 
-		// Find all accepted friend relationships involving current user
 		const friendships = await FriendRequest.find({
 			status: "accepted",
 			$or: [{ sender: currentUserId }, { receiver: currentUserId }],
 		});
 
-		// Extract friend IDs (other side of the friendship)
 		const friendIds = friendships.map((f) =>
 			f.sender.toString() === currentUserId.toString() ? f.receiver : f.sender
 		);
 
-		// Query only friends that are online
+		const oneMinuteAgo = new Date(Date.now() - 60 * 1000);
+
 		const onlineFriends = await User.find({
 			_id: { $in: friendIds },
 			isOnline: true,
+			lastSeen: { $gte: oneMinuteAgo },
 		})
-			.select("username profilePicture status lastSeen")
+			.lean()
 			.limit(50);
 
-		res.json({ success: true, data: onlineFriends });
+		res.json({
+			success: true,
+			data: Array.isArray(onlineFriends) ? onlineFriends : [],
+			message:
+				onlineFriends.length > 0
+					? "Online friends fetched successfully."
+					: "None of your friends are online right now.",
+		});
 	} catch (error) {
 		console.error("Get online friends error:", error);
 		res.status(500).json({ success: false, message: "Internal server error" });
@@ -1050,46 +1209,41 @@ router.get("/sent", authenticateToken, async (req, res) => {
 
 router.delete("/unfriend/:friendId", authenticateToken, async (req, res) => {
 	try {
-		const friendIdRaw = req.params.friendId;
-		const friendIdStr = String(friendIdRaw).replace(/[{}]/g, "");
+		const { friendId } = req.params;
+		const userId = req.user._id;
 
-		if (!mongoose.Types.ObjectId.isValid(friendIdStr)) {
-			return res
-				.status(400)
-				.json({ success: false, message: "Invalid friendId" });
+		if (!mongoose.Types.ObjectId.isValid(friendId)) {
+			return res.status(400).json({
+				success: false,
+				message: "Invalid friendId",
+			});
 		}
 
-		const friendObjectId = new mongoose.Types.ObjectId(friendIdStr);
-		const userObjectId = new mongoose.Types.ObjectId(req.user._id);
-
-		// ✅ Remove the friend request (if any)
-		const friendship = await FriendRequest.findOneAndDelete({
+		// Delete ALL friend requests between both users, no matter the status
+		const deleted = await FriendRequest.deleteMany({
 			$or: [
-				{ sender: userObjectId, receiver: friendObjectId, status: "accepted" },
-				{ sender: friendObjectId, receiver: userObjectId, status: "accepted" },
+				{ sender: userId, receiver: friendId },
+				{ sender: friendId, receiver: userId },
 			],
 		});
 
-		if (!friendship) {
-			return res
-				.status(404)
-				.json({ success: false, message: "Friendship not found" });
+		if (deleted.deletedCount === 0) {
+			return res.status(404).json({
+				success: false,
+				message: "No friendship found between users",
+			});
 		}
 
-		// ✅ Remove each user from the other's contacts
-		await Promise.all([
-			User.findByIdAndUpdate(userObjectId, {
-				$pull: { contacts: friendObjectId },
-			}),
-			User.findByIdAndUpdate(friendObjectId, {
-				$pull: { contacts: userObjectId },
-			}),
-		]);
-
-		res.json({ success: true, message: "Unfriended successfully" });
+		return res.json({
+			success: true,
+			message: "Friendship fully removed",
+		});
 	} catch (error) {
-		console.error("Unfriend error:", error);
-		res.status(500).json({ success: false, message: "Internal server error" });
+		console.error("🔥 Unfriend error:", error);
+		return res.status(500).json({
+			success: false,
+			message: "Server error while removing friend",
+		});
 	}
 });
 

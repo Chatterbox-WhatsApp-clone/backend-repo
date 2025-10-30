@@ -518,12 +518,11 @@ router.post(
  *       500:
  *         description: Internal server error
  */
-// @route   GET /api/users/search
-// @desc    Search users by username
-// @access  Private
+
 router.get("/search", authenticateToken, async (req, res) => {
 	try {
 		const { query } = req.query;
+		const userId = req.user._id;
 
 		if (!query || query.trim().length < 2) {
 			return res.status(400).json({
@@ -534,19 +533,72 @@ router.get("/search", authenticateToken, async (req, res) => {
 
 		const searchRegex = new RegExp(query.trim(), "i");
 
+		// 1️⃣ Get current user to know who they've blocked
+		const currentUser = await User.findById(userId).select(
+			"blockedUsers blockedBy"
+		);
+		const blockedIds = [
+			...currentUser.blockedUsers.map((id) => id.toString()),
+			...currentUser.blockedBy.map((id) => id.toString()),
+		];
+
+		// 2️⃣ Find matching users (excluding current user and blocked users)
 		const users = await User.find({
 			$and: [
 				{ username: searchRegex },
-				{ _id: { $ne: req.user._id } }, // Exclude current user
+				{ _id: { $ne: userId } },
+				{ _id: { $nin: blockedIds } },
 				{ isActive: true },
 			],
 		})
 			.select("username profilePicture status isOnline lastSeen")
 			.limit(20);
 
-		res.json({
+		// 3️⃣ Get all friend requests involving the current user
+		const requests = await FriendRequest.find({
+			$or: [{ sender: userId }, { receiver: userId }],
+		});
+
+		// 4️⃣ Map relationship status for each user
+		const results = users.map((user) => {
+			const request = requests.find(
+				(r) =>
+					r.sender.toString() === user._id.toString() ||
+					r.receiver.toString() === user._id.toString()
+			);
+
+			let relationshipStatus = "not sent";
+
+			if (request) {
+				if (request.status === "accepted") {
+					relationshipStatus = "accepted";
+				} else if (
+					request.status === "pending" &&
+					request.sender.toString() === userId.toString()
+				) {
+					relationshipStatus = "pending";
+				} else if (
+					request.status === "pending" &&
+					request.receiver.toString() === userId.toString()
+				) {
+					relationshipStatus = "received";
+				}
+			}
+
+			return {
+				_id: user._id,
+				username: user.username,
+				profilePicture: user.profilePicture,
+				status: user.status,
+				isOnline: user.isOnline,
+				lastSeen: user.lastSeen,
+				relationshipStatus,
+			};
+		});
+
+		res.status(200).json({
 			success: true,
-			data: users,
+			data: results,
 		});
 	} catch (error) {
 		console.error("Search users error:", error);
@@ -556,6 +608,8 @@ router.get("/search", authenticateToken, async (req, res) => {
 		});
 	}
 });
+
+
 
 /**
  * @swagger
@@ -868,29 +922,60 @@ router.get("/me/:token", authenticateToken, async (req, res) => {
  */
 router.post("/block/:id", authenticateToken, async (req, res) => {
 	try {
-		if (req.user._id.toString() === req.params.id) {
+		const blockerId = req.user._id;
+		const blockedId = req.params.id;
+
+		if (blockerId.toString() === blockedId) {
 			return res
 				.status(400)
 				.json({ success: false, message: "Cannot block yourself" });
 		}
 
-		const user = await User.findById(req.user._id).exec();
-		const targetUser = await User.findById(req.params.id);
+		const [blocker, blockedUser] = await Promise.all([
+			User.findById(blockerId),
+			User.findById(blockedId),
+		]);
 
-		if (!targetUser) {
+		if (!blockedUser) {
 			return res
 				.status(404)
 				.json({ success: false, message: "User not found" });
 		}
 
-		await user.blockUser(req.params.id);
+		// 1️⃣ Add to blockedUsers list if not already there
+		if (!blocker.blockedUsers.includes(blockedId)) {
+			blocker.blockedUsers.push(blockedId);
+		}
 
-		res.json({ success: true, message: "User blocked successfully" });
+		// 2️⃣ Remove each other from contacts (friends list)
+		blocker.contacts = blocker.contacts.filter(
+			(id) => id.toString() !== blockedId.toString()
+		);
+		blockedUser.contacts = blockedUser.contacts.filter(
+			(id) => id.toString() !== blockerId.toString()
+		);
+
+		// 3️⃣ Optionally, remove any friend requests between them
+		await FriendRequest.deleteMany({
+			$or: [
+				{ sender: blockerId, receiver: blockedId },
+				{ sender: blockedId, receiver: blockerId },
+			],
+		});
+
+		await Promise.all([blocker.save(), blockedUser.save()]);
+
+		res.json({
+			success: true,
+			message: "User blocked successfully and removed from friends list",
+		});
 	} catch (error) {
 		console.error("Block user error:", error);
 		res.status(500).json({ success: false, message: "Internal server error" });
 	}
 });
+
+
 
 /**
  * @swagger
@@ -931,29 +1016,44 @@ router.post("/block/:id", authenticateToken, async (req, res) => {
  */
 router.post("/unblock/:id", authenticateToken, async (req, res) => {
 	try {
-		if (req.user._id.toString() === req.params.id) {
-			return res
-				.status(400)
-				.json({ success: false, message: "Cannot unblock yourself" });
+		const userId = req.user._id.toString();
+		const targetUserId = req.params.id;
+
+		const user = await User.findById(userId);
+		const targetUser = await User.findById(targetUserId);
+
+		if (!user || !targetUser) {
+			return res.status(404).json({
+				success: false,
+				message: "User not found",
+			});
 		}
 
-		const user = await User.findById(req.user._id).exec();
-		const targetUser = await User.findById(req.params.id);
+		// 🟢 Remove from blocked lists
+		user.blockedUsers = user.blockedUsers.filter(
+			(id) => id.toString() !== targetUserId
+		);
 
-		if (!targetUser) {
-			return res
-				.status(404)
-				.json({ success: false, message: "User not found" });
+		if (targetUser.blockedBy) {
+			targetUser.blockedBy = targetUser.blockedBy.filter(
+				(id) => id.toString() !== userId
+			);
 		}
 
-		await user.unblockUser(req.params.id);
+		await Promise.all([user.save(), targetUser.save()]);
 
 		res.json({ success: true, message: "User unblocked successfully" });
 	} catch (error) {
 		console.error("Unblock user error:", error);
-		res.status(500).json({ success: false, message: "Internal server error" });
+		res
+			.status(500)
+			.json({
+				success: false,
+				message: "Internal server error while unblocking",
+			});
 	}
 });
+
 
 /**
  * @swagger

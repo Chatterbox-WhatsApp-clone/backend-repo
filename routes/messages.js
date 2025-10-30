@@ -318,6 +318,20 @@ router.post(
 			chat.incrementUnreadCount(req.user._id);
 			await chat.save();
 
+			// Enqueue delivery job
+			try {
+				const { messageQueue } = require("../queue/messageQueue");
+				await messageQueue.add(
+					"deliver",
+					{ messageId: message._id.toString() },
+					{
+						jobId: `message:${message._id.toString()}`,
+					}
+				);
+			} catch (e) {
+				console.error("Failed to enqueue message delivery job", e);
+			}
+
 			// Populate message for response
 			await message.populate("sender", "username profilePicture");
 			if (replyTo) {

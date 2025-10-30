@@ -63,6 +63,9 @@ const userSchema = new mongoose.Schema(
 		blockedUsers: [
 			{ type: mongoose.Schema.Types.ObjectId, ref: "User", default: [] },
 		],
+		blockedBy: [
+			{ type: mongoose.Schema.Types.ObjectId, ref: "User", default: [] },
+		],
 
 		status: { type: String, default: "Hey there! I'm using Chatterbox." },
 
@@ -161,26 +164,62 @@ userSchema.set("toJSON", {
 
 // Block / Unblock / Check / Online status methods
 userSchema.methods.blockUser = async function (userIdToBlock) {
-	if (!this.blockedUsers.includes(userIdToBlock)) {
+	const userIdStr = userIdToBlock.toString();
+
+	// Already blocked?
+	if (!this.blockedUsers.some((id) => id.toString() === userIdStr)) {
 		this.blockedUsers.push(userIdToBlock);
+
+		// Remove from contacts
 		this.contacts = this.contacts.filter(
-			(contactId) => contactId.toString() !== userIdToBlock.toString()
+			(contactId) => contactId.toString() !== userIdStr
 		);
+
+		// Also update the other user's "blockedBy"
+		const targetUser = await this.model("User").findById(userIdToBlock);
+		if (targetUser && !targetUser.blockedBy.includes(this._id)) {
+			targetUser.blockedBy.push(this._id);
+
+			// Remove current user from their contacts too
+			targetUser.contacts = targetUser.contacts.filter(
+				(contactId) => contactId.toString() !== this._id.toString()
+			);
+
+			await targetUser.save();
+		}
+
 		await this.save();
 	}
+
 	return this;
 };
 
+
+// Unblock a user
 userSchema.methods.unblockUser = async function (userIdToUnblock) {
+	const userIdStr = userIdToUnblock.toString();
+
 	this.blockedUsers = this.blockedUsers.filter(
-		(id) => id.toString() !== userIdToUnblock.toString()
+		(id) => id.toString() !== userIdStr
 	);
+
+	const targetUser = await this.model("User").findById(userIdToUnblock);
+	if (targetUser) {
+		targetUser.blockedBy = targetUser.blockedBy.filter(
+			(id) => id.toString() !== this._id.toString()
+		);
+		await targetUser.save();
+	}
+
 	await this.save();
 	return this;
 };
 
+
+// Check if blocked
 userSchema.methods.isBlocked = function (userId) {
-	return this.blockedUsers.some((id) => id.toString() === userId.toString());
+	const userIdStr = userId.toString();
+	return this.blockedUsers.some((id) => id.toString() === userIdStr);
 };
 
 userSchema.methods.setOnline = async function () {

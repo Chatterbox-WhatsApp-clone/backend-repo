@@ -8,7 +8,6 @@ const rateLimit = require("express-rate-limit");
 const path = require("path");
 const fs = require("fs");
 require("dotenv").config();
-const ConnectDB = require("./config/ConnectDB")
 
 // connect db
 // ConnectDB()
@@ -24,6 +23,7 @@ const io = socketIo(server, {
 	cors: {
 		origin: process.env.FRONTEND_URL || "http://localhost:3007",
 		methods: ["GET", "POST"],
+		credentials: true
 	},
 });
 
@@ -48,6 +48,8 @@ const errorHandler = require("./middleware/errorHandler");
 
 // Import socket handlers
 const socketHandler = require("./socket/socketHandler");
+// initialize worker to process queued message deliveries
+require("./queue/messageWorker");
 
 // Verify SMTP configuration once at startup (non-blocking)
 try {
@@ -57,7 +59,21 @@ try {
 	console.warn("⚠️  Email module not available or verification failed to run.");
 }
 
-// Connect to MongoDB
+// connect mongodb
+const MONGO_DB_KEY =
+	process.env.MONGO_DB_CONNECTION_STRING ||
+	"mongodb://127.0.0.1:27017/whatsapp-clone";
+
+// mongoose
+//   .connect(MONGO_DB_KEY, {
+//     useNewUrlParser: true,
+//     useUnifiedTopology: true,
+//     serverSelectionTimeoutMS: 5000, // try to reconnect for 5 seconds
+//     socketTimeoutMS: 45000, // close socket after 45s inactivity
+//   })
+//   .then(() => console.log("✅ Connected to MongoDB"))
+//   .catch((err) => console.error("❌ MongoDB connection error:", err));
+
 mongoose
 	.connect(
 		process.env.MONGODB_URI || "mongodb://127.0.0.1:27017/whatsapp-clone",
@@ -166,7 +182,7 @@ process.on("SIGTERM", () => {
 	});
 });
 
-if (process.env.NODE_ENV !== 'test') {
+if (process.env.NODE_ENV !== "test") {
 	server.listen(PORT, () => {
 		console.log(`🚀 Server running on port ${PORT}`);
 		console.log(`🌍 Environment: ${process.env.NODE_ENV || "development"}`);
