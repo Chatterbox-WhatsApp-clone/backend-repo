@@ -48,8 +48,6 @@ const errorHandler = require("./middleware/errorHandler");
 
 // Import socket handlers
 const socketHandler = require("./socket/socketHandler");
-// initialize worker to process queued message deliveries
-require("./queue/messageWorker");
 
 // Verify SMTP configuration once at startup (non-blocking)
 try {

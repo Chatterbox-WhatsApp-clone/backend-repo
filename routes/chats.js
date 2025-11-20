@@ -25,52 +25,99 @@ const router = express.Router();
 // @route   GET /api/chats
 // @desc    Get all chats for the user
 // @access  Private
-router.get('/', async (req, res) => {
-  try {
-    const { page = 1, limit = 20, type } = req.query;
-    const userId = req.user._id;
 
-    let query = {
-      'participants.user': userId,
-      'participants.isActive': true,
-      isActive: true
-    };
+// GET all chats with messages
+router.get("/", async (req, res) => {
+	try {
+		const { page = 1, limit = 20 } = req.query;
+		const userId = req.user._id;
 
-    // Filter by chat type if specified
-    if (type && ['private', 'group'].includes(type)) {
-      query.type = type;
-    }
+		// Fetch all active private chats for this user
+		const chats = await Chat.find({
+			type: "private",
+			"participants.user": userId,
+			"participants.isActive": true,
+			isActive: true,
+		})
+			.populate(
+				"participants.user",
+				"username fullName profilePicture isOnline lastSeen"
+			)
+			.sort({ updatedAt: -1 }); // initially sort by chat updatedAt
 
-    const chats = await Chat.find(query)
-      .populate('participants.user', 'username profilePicture isOnline lastSeen')
-      .populate('lastMessage.message')
-      .populate('lastMessage.sender', 'username profilePicture')
-      .sort({ 'lastMessage.timestamp': -1 })
-      .limit(limit * 1)
-      .skip((page - 1) * limit);
+		// Map chats to include last message and lastMessageTime
+		const chatList = await Promise.all(
+			chats.map(async (chat) => {
+				const otherParticipant = chat.participants.find(
+					(p) => String(p.user._id) !== String(userId)
+				);
+				if (!otherParticipant) return null;
 
-    // Get total count for pagination
-    const total = await Chat.countDocuments(query);
+				// Get the last message for this chat
+				const lastMessage = await Message.findOne({ chat: chat._id })
+					.sort({ createdAt: -1 })
+					.populate("sender", "username fullName profilePicture");
 
-    res.json({
-      success: true,
-      data: chats,
-      pagination: {
-        currentPage: parseInt(page),
-        totalPages: Math.ceil(total / limit),
-        totalChats: total,
-        hasNextPage: page * limit < total,
-        hasPrevPage: page > 1
-      }
-    });
-  } catch (error) {
-    console.error('Get chats error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error'
-    });
-  }
+				// Get unread count for this user
+				const unreadCount = chat.unreadCount?.get(userId.toString()) || 0;
+
+				return {
+					chatId: chat._id,
+					user: otherParticipant.user,
+					lastMessage: lastMessage
+						? {
+								_id: lastMessage._id,
+								content: lastMessage.content,
+								type: lastMessage.type,
+								sender: lastMessage.sender,
+								createdAt: lastMessage.createdAt,
+						  }
+						: null,
+					lastMessageTime: lastMessage ? lastMessage.createdAt : null, // ⏰ added
+					unreadCount: unreadCount,
+					isActive: chat.isActive,
+					createdAt: chat.createdAt,
+					updatedAt: chat.updatedAt,
+				};
+			})
+		);
+
+		const filteredChats = chatList.filter(Boolean);
+
+		// Sort chats by most recent message time
+		filteredChats.sort((a, b) => {
+			const aTime = a.lastMessageTime
+				? new Date(a.lastMessageTime).getTime()
+				: 0;
+			const bTime = b.lastMessageTime
+				? new Date(b.lastMessageTime).getTime()
+				: 0;
+			return bTime - aTime;
+		});
+
+		// Pagination
+		const paginatedChats = filteredChats.slice(
+			(page - 1) * limit,
+			page * limit
+		);
+
+		res.json({
+			success: true,
+			data: paginatedChats,
+			pagination: {
+				currentPage: parseInt(page),
+				totalPages: Math.ceil(filteredChats.length / limit),
+				totalChats: filteredChats.length,
+				hasNextPage: page * limit < filteredChats.length,
+				hasPrevPage: page > 1,
+			},
+		});
+	} catch (error) {
+		console.error("Get chats error:", error);
+		res.status(500).json({ success: false, message: "Internal server error" });
+	}
 });
+
 
 // @route   GET /api/chats/search
 // @desc    Search through user's chats

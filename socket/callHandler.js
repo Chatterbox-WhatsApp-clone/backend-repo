@@ -81,13 +81,14 @@ const callHandler = (io) => {
         await call.save();
         await call.populate('caller', 'username profilePicture');
         await call.populate('receiver', 'username profilePicture');
+        const callDetails = call.toObject({ virtuals: true });
 
         // Store call data
         activeCalls.set(call._id.toString(), {
           callId: call._id.toString(),
           callerSocket: socket.id,
           receiverSocket: receiverSocketId,
-          callData: call
+          callData: callDetails
         });
 
         // Emit to receiver
@@ -95,13 +96,15 @@ const callHandler = (io) => {
           callId: call._id.toString(),
           caller: call.caller,
           type: call.type,
-          notes: call.notes
+          notes: call.notes,
+          shareableLink: callDetails.shareableLink,
+          linkToken: callDetails.linkToken
         });
 
         // Emit to caller
         socket.emit('call_initiated', {
           callId: call._id.toString(),
-          call: call
+          call: callDetails
         });
 
         console.log(`📞 Call initiated: ${callerId} -> ${receiverId} (${type})`);

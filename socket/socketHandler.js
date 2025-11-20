@@ -218,6 +218,7 @@ const socketHandler = (io) => {
 						messageId,
 						deliveredTo: [userId],
 					});
+				console.log("message delivered to receiver");
 			} catch (err) {
 				console.error("message_delivered handler error:", err);
 			}

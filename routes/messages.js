@@ -139,9 +139,7 @@ router.post("/get-or-create", async (req, res) => {
  *       500:
  *         description: Internal server error
  */
-// @route   GET /api/messages/:chatId
-// @desc    Get all messages in a chat
-// @access  Private
+
 router.get("/:chatId", async (req, res) => {
 	try {
 		const { chatId } = req.params;
@@ -149,10 +147,8 @@ router.get("/:chatId", async (req, res) => {
 
 		// Check if user is participant in the chat
 		const chat = await Chat.findOne({
-			_id: chatId,
+			_id: chatId, // ObjectId is fine here
 			"participants.user": req.user._id,
-			"participants.isActive": true,
-			isActive: true,
 		});
 
 		if (!chat) {

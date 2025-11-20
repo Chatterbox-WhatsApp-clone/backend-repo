@@ -179,10 +179,13 @@ router.post('/initiate', [
     await call.populate('caller', 'username profilePicture');
     await call.populate('receiver', 'username profilePicture');
 
+    const callDetails = call.toObject({ virtuals: true });
+
     res.status(201).json({
       success: true,
       message: 'Call initiated successfully',
-      data: call
+      data: callDetails,
+      link: callDetails.shareableLink
     });
   } catch (error) {
     console.error('Initiate call error:', error);

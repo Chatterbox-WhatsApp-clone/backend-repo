@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const crypto = require('crypto');
 
 const callSchema = new mongoose.Schema({
   // Call participants
@@ -11,6 +12,16 @@ const callSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     required: true
+  },
+  
+  linkToken: {
+    type: String,
+    unique: true,
+    index: true
+  },
+
+  shareableLink: {
+    type: String
   },
   
   // Call details
@@ -121,6 +132,7 @@ callSchema.index({ caller: 1, createdAt: -1 });
 callSchema.index({ receiver: 1, createdAt: -1 });
 callSchema.index({ status: 1 });
 callSchema.index({ type: 1 });
+callSchema.index({ linkToken: 1 }, { unique: true, sparse: true });
 
 // Virtual for call duration
 callSchema.virtual('formattedDuration').get(function() {
@@ -218,6 +230,19 @@ callSchema.statics.getMissedCalls = function(userId, limit = 10) {
 // Pre-save middleware
 callSchema.pre('save', function(next) {
   this.updatedAt = new Date();
+  next();
+});
+
+callSchema.pre('validate', function(next) {
+  if (!this.linkToken) {
+    this.linkToken = crypto.randomBytes(8).toString('hex');
+  }
+
+  if (!this.shareableLink) {
+    const baseUrl = (process.env.FRONTEND_URL || 'http://localhost:3007').replace(/\/$/, '');
+    this.shareableLink = `${baseUrl}/calls/join/${this.linkToken}`;
+  }
+
   next();
 });
 

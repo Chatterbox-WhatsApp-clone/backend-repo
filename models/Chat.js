@@ -2,12 +2,21 @@ const mongoose = require("mongoose");
 
 const chatSchema = new mongoose.Schema(
 	{
+		// ✅ allow both ObjectId and String _id
+		_id: {
+			type: String,
+			default: function () {
+				return new mongoose.Types.ObjectId().toString();
+			},
+		},
+
 		type: {
 			type: String,
 			enum: ["private", "group"],
 			default: "private",
 			required: true,
 		},
+
 		participants: [
 			{
 				user: {
@@ -30,20 +39,24 @@ const chatSchema = new mongoose.Schema(
 				},
 			},
 		],
+
 		name: {
 			type: String,
 			trim: true,
 			maxlength: [50, "Chat name cannot exceed 50 characters"],
 		},
+
 		description: {
 			type: String,
 			trim: true,
 			maxlength: [200, "Chat description cannot exceed 200 characters"],
 		},
+
 		groupPicture: {
 			type: String,
 			default: null,
 		},
+
 		lastMessage: {
 			message: {
 				type: mongoose.Schema.Types.ObjectId,
@@ -62,15 +75,18 @@ const chatSchema = new mongoose.Schema(
 				maxlength: [100, "Message preview cannot exceed 100 characters"],
 			},
 		},
+
 		unreadCount: {
 			type: Map,
 			of: Number,
 			default: new Map(),
 		},
+
 		isActive: {
 			type: Boolean,
 			default: true,
 		},
+
 		settings: {
 			onlyAdminsCanSendMessages: {
 				type: Boolean,
@@ -81,6 +97,7 @@ const chatSchema = new mongoose.Schema(
 				default: false,
 			},
 		},
+
 		pinnedMessages: [
 			{
 				message: {
@@ -103,24 +120,23 @@ const chatSchema = new mongoose.Schema(
 	}
 );
 
-// Indexes for better query performance
+// 📘 Indexes for performance
 chatSchema.index({ "participants.user": 1 });
 chatSchema.index({ type: 1 });
 chatSchema.index({ "lastMessage.timestamp": -1 });
 
-// Virtual for participant count
+// 📘 Virtual for participant count
 chatSchema.virtual("participantCount").get(function () {
 	return this.participants.filter((p) => p.isActive).length;
 });
 
-// Method to check if user is participant
+// 📘 Instance methods
 chatSchema.methods.isParticipant = function (userId) {
 	return this.participants.some(
 		(p) => p.user.toString() === userId.toString() && p.isActive
 	);
 };
 
-// Method to check if user is admin
 chatSchema.methods.isAdmin = function (userId) {
 	return this.participants.some(
 		(p) =>
@@ -130,19 +146,17 @@ chatSchema.methods.isAdmin = function (userId) {
 	);
 };
 
-// Method to add participant
 chatSchema.methods.addParticipant = function (userId, role = "participant") {
 	if (!this.isParticipant(userId)) {
 		this.participants.push({
 			user: userId,
-			role: role,
+			role,
 			joinedAt: new Date(),
 			isActive: true,
 		});
 	}
 };
 
-// Method to remove participant
 chatSchema.methods.removeParticipant = function (userId) {
 	const participant = this.participants.find(
 		(p) => p.user.toString() === userId.toString()
@@ -152,17 +166,15 @@ chatSchema.methods.removeParticipant = function (userId) {
 	}
 };
 
-// Method to update last message
 chatSchema.methods.updateLastMessage = function (message, sender, preview) {
 	this.lastMessage = {
 		message: message._id,
 		sender: sender._id,
 		timestamp: new Date(),
-		preview: preview,
+		preview,
 	};
 };
 
-// Method to increment unread count for all participants except sender
 chatSchema.methods.incrementUnreadCount = function (senderId) {
 	this.participants.forEach((participant) => {
 		if (
@@ -176,14 +188,17 @@ chatSchema.methods.incrementUnreadCount = function (senderId) {
 	});
 };
 
-// Method to reset unread count for a user
 chatSchema.methods.resetUnreadCount = function (userId) {
 	this.unreadCount.set(userId.toString(), 0);
 };
 
-// Ensure virtual fields are serialized
-chatSchema.set("toJSON", {
-	virtuals: true,
-});
+// ✅ Utility: generate deterministic chatId for 1-on-1 private chats
+chatSchema.statics.generatePrivateChatId = function (user1Id, user2Id) {
+	const sortedIds = [user1Id.toString(), user2Id.toString()].sort();
+	return `${sortedIds[0]}_${sortedIds[1]}`;
+};
+
+// Ensure virtuals are serialized
+chatSchema.set("toJSON", { virtuals: true });
 
 module.exports = mongoose.model("Chat", chatSchema);
