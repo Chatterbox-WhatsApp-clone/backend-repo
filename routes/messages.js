@@ -11,6 +11,7 @@ const {
 } = require("../middleware/upload");
 const path = require("path");
 const fs = require("fs");
+const mongoose = require("mongoose");
 
 const router = express.Router();
 
@@ -92,18 +93,22 @@ router.post("/get-or-create", async (req, res) => {
 				.json({ success: false, message: "friendId required" });
 		}
 
-		let chat = await Chat.findOne({
-			isGroupChat: false,
-			"participants.user": { $all: [currentUserId, friendId] },
-		});
+		// Generate deterministic chat ID for private chat
+		const chatId = Chat.generatePrivateChatId(currentUserId, friendId);
+
+		// Check if chat already exists
+		let chat = await Chat.findById(chatId);
 
 		if (!chat) {
+			// Create new private chat with deterministic ID
 			chat = await Chat.create({
-				isGroupChat: false,
+				_id: chatId,
+				type: "private",
 				participants: [
 					{ user: currentUserId, isActive: true },
 					{ user: friendId, isActive: true },
 				],
+				unreadCount: new Map(),
 			});
 		}
 
@@ -111,6 +116,100 @@ router.post("/get-or-create", async (req, res) => {
 	} catch (error) {
 		console.error("Get or create chat error:", error);
 		res.status(500).json({ success: false, message: "Internal server error" });
+	}
+});
+
+/**
+ * @swagger
+ * /messages/starred/
+ *   get:
+ *     summary: Get Starred Messages
+ *     tags:
+ *       - Messages
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - name: messageId
+ *         in: path
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: All Starred messages
+ *       401:
+ *         description: Unauthorized
+ *       500:
+ *         description: Internal server error
+ */
+router.get("/starred", async (req, res) => {
+	try {
+		const userId = req.user._id;
+
+		// Find messages starred specifically by THIS user
+		const starredMessages = await Message.find({
+			starredBy: { $elemMatch: { user: userId } }
+		})
+			.populate({
+				path: "chat",
+				populate: {
+					path: "participants.user",
+					select: "username fullName phoneNumber profilePicture"
+				}
+			})
+			.populate("sender", "username fullName profilePicture")
+			.sort({ createdAt: -1 });
+
+		// Group by chat (WhatsApp Starred section)
+		const grouped = {};
+
+		starredMessages.forEach(msg => {
+			const chatId = msg.chat._id.toString();
+
+			// Find the OTHER person in the chat
+			const otherUser = msg.chat.participants.find(
+				p => p.user._id.toString() !== userId.toString()
+			)?.user;
+
+			if (!grouped[chatId]) {
+				grouped[chatId] = {
+					chatId,
+					user: {
+						_id: otherUser?._id,
+						username: otherUser?.username,
+						phoneNumber: otherUser?.phoneNumber,
+						fullName: otherUser?.fullName,
+						profilePicture: otherUser?.profilePicture
+					},
+					lastStarredMessage: {
+						_id: msg._id,
+						content: msg.content,
+						type: msg.type,
+						createdAt: msg.createdAt
+					},
+					messages: []
+				};
+			}
+
+			grouped[chatId].messages.push({
+				_id: msg._id,
+				content: msg.content,
+				type: msg.type,
+				createdAt: msg.createdAt,
+				sender: msg.sender
+			});
+		});
+
+		return res.json({
+			success: true,
+			data: Object.values(grouped)
+		});
+	} catch (err) {
+		console.error("Starred fetch error:", err);
+		return res.status(500).json({
+			success: false,
+			error: "Failed to fetch starred messages"
+		});
 	}
 });
 
@@ -145,30 +244,56 @@ router.get("/:chatId", async (req, res) => {
 		const { chatId } = req.params;
 		const { page = 1, limit = 50 } = req.query;
 
-		// Check if user is participant in the chat
+		// Resolve chatId (ObjectId or u1_u2 composite)
+		let resolvedChatId = null;
+
+		if (mongoose.Types.ObjectId.isValid(chatId)) {
+			resolvedChatId = chatId;
+		} else if (typeof chatId === "string" && chatId.includes("_")) {
+			const [u1, u2] = chatId.split("_");
+			if (
+				mongoose.Types.ObjectId.isValid(u1 || "") &&
+				mongoose.Types.ObjectId.isValid(u2 || "")
+			) {
+				resolvedChatId = Chat.generatePrivateChatId(u1, u2);
+			}
+		}
+
+		if (!resolvedChatId) {
+			return res
+				.status(400)
+				.json({ success: false, message: "Invalid chatId" });
+		}
+
+		// 🚀 FIXED: Match only the logged-in user's participant object
 		const chat = await Chat.findOne({
-			_id: chatId, // ObjectId is fine here
-			"participants.user": req.user._id,
+			_id: resolvedChatId,
+			isActive: true,
+			participants: {
+				$elemMatch: {
+					user: req.user._id,
+					isActive: true, // only require YOU to be active
+				},
+			},
 		});
 
 		if (!chat) {
-			return res.status(404).json({
-				success: false,
-				message: "Chat not found",
-			});
+			return res
+				.status(404)
+				.json({ success: false, message: "Chat not found" });
 		}
 
-		// Get messages
+		// Fetch messages
 		const messages = await Message.find({
-			chat: chatId,
+			chat: resolvedChatId,
 			isDeleted: false,
 		})
 			.populate("sender", "username profilePicture")
 			.sort({ createdAt: -1 })
-			.limit(limit * 1)
+			.limit(parseInt(limit))
 			.skip((page - 1) * limit);
 
-		// Mark messages as read
+		// Mark unread messages as read
 		const unreadMessages = messages.filter(
 			(msg) =>
 				!msg.readBy.some(
@@ -176,33 +301,114 @@ router.get("/:chatId", async (req, res) => {
 				)
 		);
 
-		if (unreadMessages.length > 0) {
+		if (unreadMessages.length) {
 			await Promise.all(
 				unreadMessages.map((msg) => msg.markAsRead(req.user._id))
 			);
 
-			// Update chat unread count
 			chat.resetUnreadCount(req.user._id);
 			await chat.save();
 		}
 
+		// Response
 		res.json({
 			success: true,
-			data: messages.reverse(), // Return in chronological order
+			data: messages.reverse(), // chronological order
 			pagination: {
 				currentPage: parseInt(page),
 				totalPages: Math.ceil(messages.length / limit),
 				totalMessages: messages.length,
 			},
 		});
+	} catch (err) {
+		console.error("Get messages error:", err);
+		res.status(500).json({ success: false, message: "Internal server error" });
+	}
+});
+
+/**
+ * @swagger
+ * /api/messages/clear/{chatId}:
+ *   delete:
+ *     summary: Clear all messages in a chat
+ *     tags:
+ *       - Messages
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - name: chatId
+ *         in: path
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: All messages cleared
+ *       401:
+ *         description: Unauthorized
+ *       500:
+ *         description: Internal server error
+ */
+router.delete("/clear/:chatId", async (req, res) => {
+	try {
+		const { chatId } = req.params;
+
+		await Message.deleteMany({ chat: chatId });
+
+		return res.status(200).json({
+			success: true,
+			message: "Messages cleared",
+		});
 	} catch (error) {
-		console.error("Get messages error:", error);
-		res.status(500).json({
+		console.error("Error clearing messages:", error);
+		return res.status(500).json({
 			success: false,
 			message: "Internal server error",
 		});
 	}
 });
+
+/**
+ * @swagger
+ * /api/messages/clear/{chatId}:
+ *   post:
+ *     summary: Star a messages in a chat
+ *     tags:
+ *       - Messages
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - name: messageId
+ *         in: path
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Message Starred
+ *       401:
+ *         description: Unauthorized
+ *       500:
+ *         description: Internal server error
+ */
+router.post("/star", async (req, res) => {
+	try {
+		const { messageId } = req.body;
+
+		const msg = await Message.findByIdAndUpdate(
+			messageId,
+			{ isStarred: true },
+			{ new: true }
+		);
+
+		res.json(msg);
+	} catch (err) {
+		res.status(500).json({ error: "Failed to star message" });
+	}
+});
+
+
+
 
 /**
  * @swagger
@@ -234,9 +440,7 @@ router.get("/:chatId", async (req, res) => {
  *       500:
  *         description: Internal server error
  */
-// @route   POST /api/messages
-// @desc    Send a new message
-// @access  Private
+
 router.post(
 	"/:chatId",
 	[

@@ -32,46 +32,34 @@ const router = express.Router();
  *       500:
  *         description: Internal server error
  */
-// @route   GET /api/calls
-// @desc    Get all call logs
-// @access  Private
+router.get("/", async (req, res) => {
+	try {
+		const userId = req.user.id;
 
-/**
- * @swagger
- * /api/calls:
- *   post:
- *     summary: Create a new call log
- *     tags:
- *       - Calls
- *     security:
- *       - bearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               participants:
- *                 type: array
- *                 items:
- *                   type: string
- *               type:
- *                 type: string
- *                 example: voice
- *     responses:
- *       201:
- *         description: Call log created
- *       400:
- *         description: Invalid input
- *       401:
- *         description: Unauthorized
- *       500:
- *         description: Internal server error
- */
-// @route   POST /api/calls
-// @desc    Create a new call log
-// @access  Private
+		const calls = await Call.find({
+			$or: [
+				{ caller: userId },
+				{ receiver: userId }
+			],
+			isActive: true
+		})
+			.populate("caller", "username profilePicture")
+			.populate("receiver", "username profilePicture")
+			.sort({ createdAt: -1 });
+
+		return res.status(200).json({
+			success: true,
+			data: calls,
+		});
+	} catch (error) {
+		console.error("Error fetching calls:", error);
+		return res.status(500).json({
+			success: false,
+			message: "Internal server error",
+		});
+	}
+});
+
 /**
  * @swagger
  * /api/calls/initiate:
@@ -196,9 +184,6 @@ router.post('/initiate', [
   }
 });
 
-// @route   POST /api/calls/:callId/answer
-// @desc    Answer an incoming call
-// @access  Private
 /**
  * @swagger
  * /api/calls/{callId}/answer:
@@ -275,9 +260,6 @@ router.post('/:callId/answer', async (req, res) => {
   }
 });
 
-// @route   POST /api/calls/:callId/reject
-// @desc    Reject an incoming call
-// @access  Private
 /**
  * @swagger
  * /api/calls/{callId}/reject:
@@ -354,9 +336,32 @@ router.post('/:callId/reject', async (req, res) => {
   }
 });
 
-// @route   POST /api/calls/:callId/end
-// @desc    End an active call
-// @access  Private
+/**
+ * @swagger
+ * /api/calls/{callId}/end:
+ *   post:
+ *     summary: End an active call
+ *     tags:
+ *       - Calls
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - name: callId
+ *         in: path
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Call ended successfully
+ *       400:
+ *         description: Call already ended
+ *       403:
+ *         description: User not part of this call
+ *       404:
+ *         description: Call not found
+ */
+
 router.post('/:callId/end', async (req, res) => {
   try {
     const { callId } = req.params;
@@ -408,9 +413,37 @@ router.post('/:callId/end', async (req, res) => {
   }
 });
 
-// @route   GET /api/calls/history
-// @desc    Get user's call history
-// @access  Private
+/**
+ * @swagger
+ * /api/calls/history:
+ *   get:
+ *     summary: Get user's call history with optional filters
+ *     tags:
+ *       - Calls
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - name: limit
+ *         in: query
+ *         schema:
+ *           type: integer
+ *       - name: type
+ *         in: query
+ *         schema:
+ *           type: string
+ *           enum: [voice, video]
+ *       - name: status
+ *         in: query
+ *         schema:
+ *           type: string
+ *           enum: [initiating, ringing, answered, ended, missed, rejected]
+ *     responses:
+ *       200:
+ *         description: Filtered call list
+ *       500:
+ *         description: Internal server error
+ */
+
 router.get('/history', async (req, res) => {
   try {
     const { limit = 20, type, status } = req.query;
@@ -451,9 +484,27 @@ router.get('/history', async (req, res) => {
   }
 });
 
-// @route   GET /api/calls/missed
-// @desc    Get user's missed calls
-// @access  Private
+/**
+ * @swagger
+ * /api/calls/missed:
+ *   get:
+ *     summary: Get user's missed calls
+ *     tags:
+ *       - Calls
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - name: limit
+ *         in: query
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: List of missed calls
+ *       500:
+ *         description: Internal server error
+ */
+
 router.get('/missed', async (req, res) => {
   try {
     const { limit = 10 } = req.query;
@@ -475,9 +526,30 @@ router.get('/missed', async (req, res) => {
   }
 });
 
-// @route   GET /api/calls/:callId
-// @desc    Get specific call details
-// @access  Private
+/**
+ * @swagger
+ * /api/calls/{callId}:
+ *   get:
+ *     summary: Get details of a specific call
+ *     tags:
+ *       - Calls
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - name: callId
+ *         in: path
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Call details
+ *       403:
+ *         description: Not allowed
+ *       404:
+ *         description: Call not found
+ */
+
 router.get('/:callId', async (req, res) => {
   try {
     const { callId } = req.params;
@@ -517,9 +589,42 @@ router.get('/:callId', async (req, res) => {
   }
 });
 
-// @route   PUT /api/calls/:callId/settings
-// @desc    Update call settings (mute, record, etc.)
-// @access  Private
+/**
+ * @swagger
+ * /api/calls/{callId}/settings:
+ *   put:
+ *     summary: Update call settings (mute, video, record)
+ *     tags:
+ *       - Calls
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - name: callId
+ *         in: path
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               muteAudio:
+ *                 type: boolean
+ *               muteVideo:
+ *                 type: boolean
+ *               recordCall:
+ *                 type: boolean
+ *     responses:
+ *       200:
+ *         description: Settings updated
+ *       400:
+ *         description: Cannot update settings now
+ *       404:
+ *         description: Call not found
+ */
+ 
 router.put('/:callId/settings', [
   body('muteAudio').optional().isBoolean(),
   body('muteVideo').optional().isBoolean(),
@@ -588,9 +693,27 @@ router.put('/:callId/settings', [
   }
 });
 
-// @route   DELETE /api/calls/:callId
-// @desc    Delete a call record
-// @access  Private
+/**
+ * @swagger
+ * /api/calls/{callId}:
+ *   delete:
+ *     summary: Soft delete a call record
+ *     tags:
+ *       - Calls
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - name: callId
+ *         in: path
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Call deleted
+ *       404:
+ *         description: Call not found
+ */
+
 router.delete('/:callId', async (req, res) => {
   try {
     const { callId } = req.params;

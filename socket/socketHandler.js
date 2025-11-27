@@ -133,24 +133,25 @@ const socketHandler = (io) => {
 						return socket.emit("message_error", {
 							message: "Chat not found & receiverId missing",
 						});
-					chat = await Chat.findOne({
-						isActive: true,
-						participants: {
-							$all: [
-								{ $elemMatch: { user: senderId, isActive: true } },
-								{ $elemMatch: { user: receiverId, isActive: true } },
-							],
-						},
-					});
+					
+					// Generate deterministic chat ID for private chat
+					const deterministicChatId = Chat.generatePrivateChatId(senderId, receiverId);
+					
+					// Try to find chat by deterministic ID
+					chat = await Chat.findById(deterministicChatId);
+					
 					if (!chat) {
-						chat = new Chat({
+						// Create new private chat with deterministic ID
+						chat = await Chat.create({
+							_id: deterministicChatId,
+							type: "private",
 							participants: [
 								{ user: senderId, isActive: true },
 								{ user: receiverId, isActive: true },
 							],
 							isActive: true,
+							unreadCount: new Map(),
 						});
-						await chat.save();
 					}
 					chatId = chat._id.toString();
 				}

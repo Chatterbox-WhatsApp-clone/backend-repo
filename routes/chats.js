@@ -1,127 +1,11 @@
-const express = require('express');
-const { body, validationResult } = require('express-validator');
-const Chat = require('../models/Chat');
-const User = require('../models/User');
-const Message = require('../models/Message');
+const express = require("express");
+const { body, validationResult } = require("express-validator");
+const mongoose = require("mongoose");
+const Chat = require("../models/Chat");
+const User = require("../models/User");
+const Message = require("../models/Message");
 const router = express.Router();
 
-/**
- * @swagger
- * /api/chats:
- *   get:
- *     summary: Get all chats for the user
- *     tags:
- *       - Chats
- *     security:
- *       - bearerAuth: []
- *     responses:
- *       200:
- *         description: List of chats
- *       401:
- *         description: Unauthorized
- *       500:
- *         description: Internal server error
- */
-// @route   GET /api/chats
-// @desc    Get all chats for the user
-// @access  Private
-
-// GET all chats with messages
-router.get("/", async (req, res) => {
-	try {
-		const { page = 1, limit = 20 } = req.query;
-		const userId = req.user._id;
-
-		// Fetch all active private chats for this user
-		const chats = await Chat.find({
-			type: "private",
-			"participants.user": userId,
-			"participants.isActive": true,
-			isActive: true,
-		})
-			.populate(
-				"participants.user",
-				"username fullName profilePicture isOnline lastSeen"
-			)
-			.sort({ updatedAt: -1 }); // initially sort by chat updatedAt
-
-		// Map chats to include last message and lastMessageTime
-		const chatList = await Promise.all(
-			chats.map(async (chat) => {
-				const otherParticipant = chat.participants.find(
-					(p) => String(p.user._id) !== String(userId)
-				);
-				if (!otherParticipant) return null;
-
-				// Get the last message for this chat
-				const lastMessage = await Message.findOne({ chat: chat._id })
-					.sort({ createdAt: -1 })
-					.populate("sender", "username fullName profilePicture");
-
-				// Get unread count for this user
-				const unreadCount = chat.unreadCount?.get(userId.toString()) || 0;
-
-				return {
-					chatId: chat._id,
-					user: otherParticipant.user,
-					lastMessage: lastMessage
-						? {
-								_id: lastMessage._id,
-								content: lastMessage.content,
-								type: lastMessage.type,
-								sender: lastMessage.sender,
-								createdAt: lastMessage.createdAt,
-						  }
-						: null,
-					lastMessageTime: lastMessage ? lastMessage.createdAt : null, // ⏰ added
-					unreadCount: unreadCount,
-					isActive: chat.isActive,
-					createdAt: chat.createdAt,
-					updatedAt: chat.updatedAt,
-				};
-			})
-		);
-
-		const filteredChats = chatList.filter(Boolean);
-
-		// Sort chats by most recent message time
-		filteredChats.sort((a, b) => {
-			const aTime = a.lastMessageTime
-				? new Date(a.lastMessageTime).getTime()
-				: 0;
-			const bTime = b.lastMessageTime
-				? new Date(b.lastMessageTime).getTime()
-				: 0;
-			return bTime - aTime;
-		});
-
-		// Pagination
-		const paginatedChats = filteredChats.slice(
-			(page - 1) * limit,
-			page * limit
-		);
-
-		res.json({
-			success: true,
-			data: paginatedChats,
-			pagination: {
-				currentPage: parseInt(page),
-				totalPages: Math.ceil(filteredChats.length / limit),
-				totalChats: filteredChats.length,
-				hasNextPage: page * limit < filteredChats.length,
-				hasPrevPage: page > 1,
-			},
-		});
-	} catch (error) {
-		console.error("Get chats error:", error);
-		res.status(500).json({ success: false, message: "Internal server error" });
-	}
-});
-
-
-// @route   GET /api/chats/search
-// @desc    Search through user's chats
-// @access  Private
 /**
  * @swagger
  * /api/chats/search:
@@ -159,160 +43,734 @@ router.get("/", async (req, res) => {
  *       500:
  *         description: Internal server error
  */
-router.get('/search', async (req, res) => {
-  try {
-    const { query, type, limit = 20 } = req.query;
-    const userId = req.user._id;
+router.get("/search", async (req, res) => {
+	try {
+		const { query, type, limit = 20 } = req.query;
+		const userId = req.user._id;
 
-    if (!query || query.trim().length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Search query is required'
-      });
-    }
+		if (!query || query.trim().length === 0) {
+			return res.status(400).json({
+				success: false,
+				message: "Search query is required",
+			});
+		}
 
-    // Build search query
-    let searchQuery = {
-      'participants.user': userId,
-      'participants.isActive': true,
-      isActive: true
-    };
+		// Build search query
+		let searchQuery = {
+			"participants.user": userId,
+			"participants.isActive": true,
+			isActive: true,
+		};
 
-    // Filter by chat type if specified
-    if (type && ['private', 'group'].includes(type)) {
-      searchQuery.type = type;
-    }
+		// Filter by chat type if specified
+		if (type && ["private", "group"].includes(type)) {
+			searchQuery.type = type;
+		}
 
-    // Get user's chats
-    const userChats = await Chat.find(searchQuery)
-      .populate('participants.user', 'username profilePicture isOnline lastSeen')
-      .populate('lastMessage.message')
-      .populate('lastMessage.sender', 'username profilePicture');
+		// Get user's chats
+		const userChats = await Chat.find(searchQuery)
+			.populate(
+				"participants.user",
+				"username profilePicture isOnline lastSeen"
+			)
+			.populate("lastMessage.message")
+			.populate("lastMessage.sender", "username profilePicture");
 
-    // Filter chats based on search criteria
-    const searchTerm = query.toLowerCase().trim();
-    const filteredChats = userChats.filter(chat => {
-      // Search in participant names (for private chats)
-      if (chat.type === 'private') {
-        const otherParticipant = chat.participants.find(p => 
-          p.user._id.toString() !== userId.toString()
-        );
-        if (otherParticipant && otherParticipant.user.username.toLowerCase().includes(searchTerm)) {
-          return true;
-        }
-      }
+		// Filter chats based on search criteria
+		const searchTerm = query.toLowerCase().trim();
+		const filteredChats = userChats.filter((chat) => {
+			// Search in participant names (for private chats)
+			if (chat.type === "private") {
+				const otherParticipant = chat.participants.find(
+					(p) => p.user._id.toString() !== userId.toString()
+				);
+				if (
+					otherParticipant &&
+					otherParticipant.user.username.toLowerCase().includes(searchTerm)
+				) {
+					return true;
+				}
+			}
 
-      // Search in group name (for group chats)
-      if (chat.type === 'group' && chat.name && chat.name.toLowerCase().includes(searchTerm)) {
-        return true;
-      }
+			// Search in group name (for group chats)
+			if (
+				chat.type === "group" &&
+				chat.name &&
+				chat.name.toLowerCase().includes(searchTerm)
+			) {
+				return true;
+			}
 
-      // Search in last message content
-      if (chat.lastMessage && chat.lastMessage.message) {
-        const message = chat.lastMessage.message;
-        if (message.type === 'text' && message.content.text && 
-            message.content.text.toLowerCase().includes(searchTerm)) {
-          return true;
-        }
-        // Search in media file names
-        if (message.type !== 'text' && message.content.media && 
-            message.content.media.filename && 
-            message.content.media.filename.toLowerCase().includes(searchTerm)) {
-          return true;
-        }
-      }
+			// Search in last message content
+			if (chat.lastMessage && chat.lastMessage.message) {
+				const message = chat.lastMessage.message;
+				if (
+					message.type === "text" &&
+					message.content.text &&
+					message.content.text.toLowerCase().includes(searchTerm)
+				) {
+					return true;
+				}
+				// Search in media file names
+				if (
+					message.type !== "text" &&
+					message.content.media &&
+					message.content.media.filename &&
+					message.content.media.filename.toLowerCase().includes(searchTerm)
+				) {
+					return true;
+				}
+			}
 
-      // Search in chat description (for group chats)
-      if (chat.type === 'group' && chat.description && 
-          chat.description.toLowerCase().includes(searchTerm)) {
-        return true;
-      }
+			// Search in chat description (for group chats)
+			if (
+				chat.type === "group" &&
+				chat.description &&
+				chat.description.toLowerCase().includes(searchTerm)
+			) {
+				return true;
+			}
 
-      return false;
-    });
+			return false;
+		});
 
-    // Sort by relevance (exact matches first, then partial matches)
-    const sortedChats = filteredChats.sort((a, b) => {
-      const aScore = getRelevanceScore(a, searchTerm, userId);
-      const bScore = getRelevanceScore(b, searchTerm, userId);
-      return bScore - aScore;
-    });
+		// Sort by relevance (exact matches first, then partial matches)
+		const sortedChats = filteredChats.sort((a, b) => {
+			const aScore = getRelevanceScore(a, searchTerm, userId);
+			const bScore = getRelevanceScore(b, searchTerm, userId);
+			return bScore - aScore;
+		});
 
-    // Apply limit
-    const limitedChats = sortedChats.slice(0, parseInt(limit));
+		// Apply limit
+		const limitedChats = sortedChats.slice(0, parseInt(limit));
 
-    res.json({
-      success: true,
-      data: limitedChats,
-      totalFound: filteredChats.length,
-      searchQuery: query,
-      resultsCount: limitedChats.length
-    });
-  } catch (error) {
-    console.error('Search chats error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error'
-    });
-  }
+		res.json({
+			success: true,
+			data: limitedChats,
+			totalFound: filteredChats.length,
+			searchQuery: query,
+			resultsCount: limitedChats.length,
+		});
+	} catch (error) {
+		console.error("Search chats error:", error);
+		res.status(500).json({
+			success: false,
+			message: "Internal server error",
+		});
+	}
 });
 
 // Helper function to calculate relevance score
 function getRelevanceScore(chat, searchTerm, userId) {
-  let score = 0;
-  const term = searchTerm.toLowerCase();
+	let score = 0;
+	const term = searchTerm.toLowerCase();
 
-  // Exact matches get highest score
-  if (chat.type === 'private') {
-    const otherParticipant = chat.participants.find(p => 
-      p.user._id.toString() !== userId.toString()
-    );
-    if (otherParticipant) {
-      if (otherParticipant.user.username.toLowerCase() === term) {
-        score += 100;
-      } else if (otherParticipant.user.username.toLowerCase().startsWith(term)) {
-        score += 50;
-      } else if (otherParticipant.user.username.toLowerCase().includes(term)) {
-        score += 25;
-      }
-    }
-  }
+	// Exact matches get highest score
+	if (chat.type === "private") {
+		const otherParticipant = chat.participants.find(
+			(p) => p.user._id.toString() !== userId.toString()
+		);
+		if (otherParticipant) {
+			if (otherParticipant.user.username.toLowerCase() === term) {
+				score += 100;
+			} else if (
+				otherParticipant.user.username.toLowerCase().startsWith(term)
+			) {
+				score += 50;
+			} else if (otherParticipant.user.username.toLowerCase().includes(term)) {
+				score += 25;
+			}
+		}
+	}
 
-  if (chat.type === 'group') {
-    if (chat.name && chat.name.toLowerCase() === term) {
-      score += 100;
-    } else if (chat.name && chat.name.toLowerCase().startsWith(term)) {
-      score += 50;
-    } else if (chat.name && chat.name.toLowerCase().includes(term)) {
-      score += 25;
-    }
-  }
+	if (chat.type === "group") {
+		if (chat.name && chat.name.toLowerCase() === term) {
+			score += 100;
+		} else if (chat.name && chat.name.toLowerCase().startsWith(term)) {
+			score += 50;
+		} else if (chat.name && chat.name.toLowerCase().includes(term)) {
+			score += 25;
+		}
+	}
 
-  // Last message relevance
-  if (chat.lastMessage && chat.lastMessage.message) {
-    const message = chat.lastMessage.message;
-    if (message.type === 'text' && message.content.text) {
-      const text = message.content.text.toLowerCase();
-      if (text === term) {
-        score += 30;
-      } else if (text.startsWith(term)) {
-        score += 20;
-      } else if (text.includes(term)) {
-        score += 10;
-      }
-    }
-  }
+	// Last message relevance
+	if (chat.lastMessage && chat.lastMessage.message) {
+		const message = chat.lastMessage.message;
+		if (message.type === "text" && message.content.text) {
+			const text = message.content.text.toLowerCase();
+			if (text === term) {
+				score += 30;
+			} else if (text.startsWith(term)) {
+				score += 20;
+			} else if (text.includes(term)) {
+				score += 10;
+			}
+		}
+	}
 
-  // Recent activity bonus
-  if (chat.lastMessage && chat.lastMessage.timestamp) {
-    const hoursSinceLastMessage = (Date.now() - chat.lastMessage.timestamp) / (1000 * 60 * 60);
-    if (hoursSinceLastMessage < 1) score += 15;
-    else if (hoursSinceLastMessage < 24) score += 10;
-    else if (hoursSinceLastMessage < 168) score += 5; // 1 week
-  }
+	// Recent activity bonus
+	if (chat.lastMessage && chat.lastMessage.timestamp) {
+		const hoursSinceLastMessage =
+			(Date.now() - chat.lastMessage.timestamp) / (1000 * 60 * 60);
+		if (hoursSinceLastMessage < 1) score += 15;
+		else if (hoursSinceLastMessage < 24) score += 10;
+		else if (hoursSinceLastMessage < 168) score += 5; // 1 week
+	}
 
-  return score;
+	return score;
 }
+
+/**
+ * @swagger
+ * /api/chats/unread:
+ *   get:
+ *     summary: Get all unread messages for the authenticated user
+ *     tags:
+ *       - Chats
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: List of unread messages grouped by chat
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 totalUnread:
+ *                   type: number
+ *                   description: Total unread messages across all chats
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       chatId:
+ *                         type: string
+ *                         description: ID of the chat
+ *                       unreadCount:
+ *                         type: number
+ *                         description: Number of unread messages in this chat
+ *                       messages:
+ *                         type: array
+ *                         items:
+ *                           type: object
+ *                           properties:
+ *                             _id:
+ *                               type: string
+ *                               description: Message ID
+ *                             content:
+ *                               type: string
+ *                             type:
+ *                               type: string
+ *                               enum: [text, image, audio, video]
+ *                             sender:
+ *                               type: object
+ *                               properties:
+ *                                 username:
+ *                                   type: string
+ *                                 fullName:
+ *                                   type: string
+ *                                 profilePicture:
+ *                                   type: string
+ *                             createdAt:
+ *                               type: string
+ *                               format: date-time
+ *       401:
+ *         description: Unauthorized
+ *       500:
+ *         description: Internal server error
+ */
+router.get("/unread", async (req, res) => {
+	try {
+		const userId = req.user._id;
+
+		// 1️⃣ Find all chats where user has unread messages
+		const chatsWithUnread = await Chat.find({
+			type: "private",
+			"participants.user": userId,
+			isActive: true,
+			[`unreadCount.${userId}`]: { $gt: 0 }, // unread > 0
+		});
+
+		if (!chatsWithUnread.length) {
+			return res.json({
+				success: true,
+				data: [],
+				totalUnread: 0,
+			});
+		}
+
+		// 2️⃣ For each chat, fetch unread messages
+		const unreadMessages = await Promise.all(
+			chatsWithUnread.map(async (chat) => {
+				// unread count for this chat
+				const unreadCount = chat.unreadCount.get(userId.toString()) || 0;
+
+				// get unread messages from Message model
+				const messages = await Message.find({
+					chat: chat._id,
+					readBy: { $ne: userId }, // user hasn’t read
+					sender: { $ne: userId }, // exclude user's own messages
+				})
+					.sort({ createdAt: -1 })
+					.populate("sender", "username fullName profilePicture");
+
+				return {
+					chatId: chat._id,
+					unreadCount,
+					messages,
+				};
+			})
+		);
+
+		// 3️⃣ Sum total unread across all chats
+		const totalUnread = unreadMessages.reduce(
+			(total, chat) => total + chat.unreadCount,
+			0
+		);
+
+		return res.json({
+			success: true,
+			data: unreadMessages,
+			totalUnread,
+		});
+	} catch (error) {
+		console.error("Fetch unread messages error:", error);
+		res.status(500).json({
+			success: false,
+			message: "Internal server error",
+		});
+	}
+});
+
+/**
+ * @swagger
+ * /api/chats:
+ *   get:
+ *     summary: Get all chats for the user
+ *     tags:
+ *       - Chats
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: List of chats
+ *       401:
+ *         description: Unauthorized
+ *       500:
+ *         description: Internal server error
+ */
+router.get("/", async (req, res) => {
+	try {
+		const { page = 1, limit = 20 } = req.query;
+		const userId = req.user._id;
+
+		// Fetch all chats
+		const chats = await Chat.find({
+			type: "private",
+			"participants.user": userId,
+			"participants.isActive": true,
+			isActive: true,
+		})
+			.populate(
+				"participants.user",
+				"username fullName profilePicture isOnline lastSeen"
+			)
+			.populate("favorites.user", "_id")
+			.sort({ updatedAt: -1 });
+
+		const chatList = await Promise.all(
+			chats.map(async (chat) => {
+				const otherParticipant = chat.participants.find(
+					(p) => String(p.user._id) !== String(userId)
+				);
+				if (!otherParticipant) return null;
+
+				// ⭐️ CHECK IF USER HAS FAVORITED THIS CHAT
+				const isFavourite = chat.favorites.some(
+					(f) => String(f.user?._id || f.user) === String(userId)
+				);
+
+				// ⭐ Get last message
+				const lastMessage = await Message.findOne({ chat: chat._id })
+					.sort({ createdAt: -1 })
+					.populate("sender", "username fullName profilePicture");
+
+				const unreadCount = chat.unreadCount?.get(userId.toString()) || 0;
+
+				return {
+					chatId: chat._id,
+					user: otherParticipant.user,
+
+					// ⭐ last message object
+					lastMessage: lastMessage
+						? {
+							_id: lastMessage._id,
+							content: lastMessage.content,
+							type: lastMessage.type,
+							sender: lastMessage.sender,
+							createdAt: lastMessage.createdAt,
+						}
+						: null,
+
+					// ⭐ which time to sort by
+					lastMessageTime: lastMessage ? lastMessage.createdAt : null,
+
+					unreadCount,
+					isFavourite,
+					isActive: chat.isActive,
+					createdAt: chat.createdAt,
+					updatedAt: chat.updatedAt,
+				};
+			})
+		);
+
+		const filteredChats = chatList.filter(Boolean);
+
+		// ⭐ Sort by most recent
+		filteredChats.sort((a, b) => {
+			const aTime = a.lastMessageTime
+				? new Date(a.lastMessageTime).getTime()
+				: 0;
+			const bTime = b.lastMessageTime
+				? new Date(b.lastMessageTime).getTime()
+				: 0;
+			return bTime - aTime;
+		});
+
+		const paginatedChats = filteredChats.slice(
+			(page - 1) * limit,
+			page * limit
+		);
+
+		res.json({
+			success: true,
+			data: paginatedChats,
+			pagination: {
+				currentPage: parseInt(page),
+				totalPages: Math.ceil(filteredChats.length / limit),
+				totalChats: filteredChats.length,
+				hasNextPage: page * limit < filteredChats.length,
+				hasPrevPage: page > 1,
+			},
+		});
+	} catch (error) {
+		console.error("Get chats error:", error);
+		res.status(500).json({ success: false, message: "Internal server error" });
+	}
+});
+
+/**
+ * @swagger
+ * /api/chats/favorite:
+ *   get:
+ *     summary: Get all favourite chats
+ *     tags:
+ *       - Chats
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: List of all favorites chats by chat
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       chatId:
+ *                         type: string
+ *                         description: ID of the chat
+ *                       unreadCount:
+ *                         type: number
+ *                         description: Number of unread messages in this chat
+ *                       messages:
+ *                         type: array
+ *                         items:
+ *                           type: object
+ *                           properties:
+ *                             _id:
+ *                               type: string
+ *                               description: Message ID
+ *                             content:
+ *                               type: string
+ *                             type:
+ *                               type: string
+ *                               enum: [text, image, audio, video]
+ *                             sender:
+ *                               type: object
+ *                               properties:
+ *                                 username:
+ *                                   type: string
+ *                                 fullName:
+ *                                   type: string
+ *                                 profilePicture:
+ *                                   type: string
+ *                             createdAt:
+ *                               type: string
+ *                               format: date-time
+ *       401:
+ *         description: Unauthorized
+ *       500:
+ *         description: Internal server error
+ */
+router.get("/favorite", async (req, res) => {
+	try {
+		const userId = req.user._id;
+
+		const favoriteChats = await Chat.find({
+			"favorites.user": userId,
+			isActive: true,
+		})
+			.populate(
+				"participants.user",
+				"username fullName profilePicture isOnline lastSeen"
+			)
+			.sort({ updatedAt: -1 });
+
+		const data = await Promise.all(
+			favoriteChats.map(async (chat) => {
+				// Fetch real last message
+				const lastMessage = await Message.findOne({ chat: chat._id })
+					.sort({ createdAt: -1 })
+					.populate("sender", "username fullName profilePicture");
+
+				// Find other participant (not the requesting user)
+				const otherParticipant = chat.participants.find(
+					(p) => p.user._id.toString() !== userId.toString()
+				);
+
+				return {
+					chatId: chat._id,
+					user: otherParticipant ? otherParticipant.user : null,
+					lastMessage: lastMessage
+						? {
+							_id: lastMessage._id,
+							content: lastMessage.content,
+							type: lastMessage.type,
+							sender: lastMessage.sender,
+							createdAt: lastMessage.createdAt,
+							status: lastMessage.status,
+						}
+						: null,
+				};
+			})
+		);
+
+		return res.json({
+			success: true,
+			data: data,
+		});
+	} catch (error) {
+		console.error("Fetch favorite chats error:", error);
+		res.status(500).json({
+			success: false,
+			message: "Internal server error",
+		});
+	}
+});
+
+/**
+ * @swagger
+ * /api/chats/favorite:
+ *   post:
+ *     summary: Add a chat to favorites
+ *     tags:
+ *       - Chats
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               chatId:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Chat favorited
+ *       401:
+ *         description: Unauthorized
+ *       500:
+ *         description: Internal server error
+ */
+router.post("/favorite", async (req, res) => {
+	try {
+		const userId = req.user._id;
+		const { chatId } = req.body;
+
+		const chat = await Chat.findById(chatId);
+
+		if (!chat) {
+			return res
+				.status(404)
+				.json({ success: false, message: "Chat not found" });
+		}
+
+		// Check if already liked
+		const alreadyFavorite = chat.favorites.some(
+			(fav) => fav.user.toString() === userId.toString()
+		);
+
+		if (alreadyFavorite) {
+			return res.json({ success: true, message: "Already favorited" });
+		}
+
+		chat.favorites.push({ user: userId });
+		await chat.save();
+
+		res.json({ success: true, message: "Chat favorited" });
+	} catch (err) {
+		console.log("Favorite error:", err);
+		res.status(500).json({ success: false, error: "Failed to favorite chat" });
+	}
+});
+
+/**
+ * @swagger
+ * /api/chats/favorite/{chatId}
+ *   delete:
+ *     summary: Get all favourite chats
+ *     tags:
+ *       - Chats
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: List of all favorites chats by chat
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 totalUnread:
+ *                   type: number
+ *                   description: Total unread messages across all chats
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       chatId:
+ *                         type: string
+ *                         description: ID of the chat
+ *                       unreadCount:
+ *                         type: number
+ *                         description: Number of unread messages in this chat
+ *                       messages:
+ *                         type: array
+ *                         items:
+ *                           type: object
+ *                           properties:
+ *                             _id:
+ *                               type: string
+ *                               description: Message ID
+ *                             content:
+ *                               type: string
+ *                             type:
+ *                               type: string
+ *                               enum: [text, image, audio, video]
+ *                             sender:
+ *                               type: object
+ *                               properties:
+ *                                 username:
+ *                                   type: string
+ *                                 fullName:
+ *                                   type: string
+ *                                 profilePicture:
+ *                                   type: string
+ *                             createdAt:
+ *                               type: string
+ *                               format: date-time
+ *       401:
+ *         description: Unauthorized
+ *       500:
+ *         description: Internal server error
+ */
+router.delete("/favorite/:chatId", async (req, res) => {
+	try {
+		const userId = req.user._id;
+		const { chatId } = req.params;
+
+		const chat = await Chat.findById(chatId);
+
+		if (!chat) {
+			return res
+				.status(404)
+				.json({ success: false, message: "Chat not found" });
+		}
+
+		chat.favorites = chat.favorites.filter(
+			(fav) => fav.user.toString() !== userId.toString()
+		);
+
+		await chat.save();
+
+		res.json({ success: true, message: "Chat removed from favorites" });
+	} catch (err) {
+		console.log("Unfavorite error:", err);
+		res
+			.status(500)
+			.json({ success: false, error: "Failed to remove favorite" });
+	}
+});
+
+/**
+ * @swagger
+ * /api/chats/delete/{chatId}:
+ *   delete:
+ *     summary: Delete (archive) a chat
+ *     tags:
+ *       - Chats
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - name: chatId
+ *         in: path
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Chat deleted
+ *       401:
+ *         description: Unauthorized
+ *       500:
+ *         description: Internal server error
+ */
+router.delete("/chats/delete/:chatId", async (req, res) => {
+	try {
+		const { chatId } = req.params;
+
+		await Chat.findByIdAndUpdate(chatId, {
+			isActive: false,
+		});
+
+		return res.status(200).json({
+			success: true,
+			message: "Chat deleted",
+		});
+	} catch (error) {
+		console.error("Error deleting chat:", error);
+		return res.status(500).json({
+			success: false,
+			message: "Internal server error",
+		});
+	}
+});
 
 /**
  * @swagger
@@ -345,108 +803,146 @@ function getRelevanceScore(chat, searchTerm, userId) {
 // @route   POST /api/chats
 // @desc    Create a new chat
 // @access  Private
-router.post('/', [
-  body('type')
-    .isIn(['private', 'group'])
-    .withMessage('Chat type must be private or group'),
-  body('participants')
-    .isArray({ min: 1 })
-    .withMessage('At least one participant is required'),
-  body('participants.*.userId')
-    .isMongoId()
-    .withMessage('Valid user ID is required for each participant'),
-  body('name')
-    .optional()
-    .isLength({ min: 1, max: 100 })
-    .withMessage('Group name must be between 1 and 100 characters')
-], async (req, res) => {
-  try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({
-        success: false,
-        errors: errors.array()
-      });
-    }
+router.post(
+	"/",
+	[
+		body("type")
+			.isIn(["private", "group"])
+			.withMessage("Chat type must be private or group"),
+		body("participants")
+			.isArray({ min: 1 })
+			.withMessage("At least one participant is required"),
+		body("participants.*.userId")
+			.isMongoId()
+			.withMessage("Valid user ID is required for each participant"),
+		body("name")
+			.optional()
+			.isLength({ min: 1, max: 100 })
+			.withMessage("Group name must be between 1 and 100 characters"),
+	],
+	async (req, res) => {
+		try {
+			const errors = validationResult(req);
+			if (!errors.isEmpty()) {
+				return res.status(400).json({
+					success: false,
+					errors: errors.array(),
+				});
+			}
 
-    const { type, participants, name, description } = req.body;
-    const creatorId = req.user._id;
+			const { type, participants, name, description } = req.body;
+			const creatorId = req.user._id;
 
-    // Validate participants
-    const participantIds = participants.map(p => p.userId);
-    
-    // Check if all participants exist
-    const users = await User.find({ _id: { $in: participantIds } });
-    if (users.length !== participantIds.length) {
-      return res.status(400).json({
-        success: false,
-        message: 'One or more participants not found'
-      });
-    }
+			// Validate participants
+			const participantIds = participants.map((p) => p.userId);
 
-    // For private chats, ensure only 2 participants
-    if (type === 'private' && participantIds.length !== 2) {
-      return res.status(400).json({
-        success: false,
-        message: 'Private chats must have exactly 2 participants'
-      });
-    }
+			// Check if all participants exist
+			const users = await User.find({ _id: { $in: participantIds } });
+			if (users.length !== participantIds.length) {
+				return res.status(400).json({
+					success: false,
+					message: "One or more participants not found",
+				});
+			}
 
-    // For group chats, ensure creator is included
-    if (type === 'group' && !participantIds.includes(creatorId.toString())) {
-      participantIds.push(creatorId.toString());
-    }
+			// For private chats, ensure only 2 participants
+			if (type === "private" && participantIds.length !== 2) {
+				return res.status(400).json({
+					success: false,
+					message: "Private chats must have exactly 2 participants",
+				});
+			}
 
-    // Check if private chat already exists
-    if (type === 'private') {
-      const existingChat = await Chat.findOne({
-        type: 'private',
-        'participants.user': { $all: participantIds },
-        'participants.isActive': true,
-        isActive: true
-      });
+			// For group chats, ensure creator is included
+			if (type === "group" && !participantIds.includes(creatorId.toString())) {
+				participantIds.push(creatorId.toString());
+			}
 
-      if (existingChat) {
-        return res.status(400).json({
-          success: false,
-          message: 'Private chat already exists with these participants'
-        });
-      }
-    }
+			let chat;
 
-    // Create chat
-    const chat = new Chat({
-      type,
-      name: type === 'group' ? name : undefined,
-      description: type === 'group' ? description : undefined,
-      participants: participantIds.map(userId => ({
-        user: userId,
-        role: userId === creatorId.toString() ? 'admin' : 'member',
-        isActive: true,
-        joinedAt: new Date()
-      })),
-      createdBy: creatorId
-    });
+			// For private chats, use deterministic ID
+			if (type === "private") {
+				if (participantIds.length !== 2) {
+					return res.status(400).json({
+						success: false,
+						message: "Private chats must have exactly 2 participants",
+					});
+				}
 
-    await chat.save();
+				// Generate deterministic chat ID
+				const chatId = Chat.generatePrivateChatId(
+					participantIds[0],
+					participantIds[1]
+				);
 
-    // Populate chat with user details
-    await chat.populate('participants.user', 'username profilePicture isOnline lastSeen');
-    await chat.populate('createdBy', 'username profilePicture');
+				// Check if chat already exists
+				chat = await Chat.findById(chatId);
 
-    res.status(201).json({
-      success: true,
-      message: 'Chat created successfully',
-      data: chat
-    });
-  } catch (error) {
-    console.error('Create chat error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error'
-    });
-  }
-});
+				if (chat) {
+					// Populate and return existing chat
+					await chat.populate(
+						"participants.user",
+						"username profilePicture isOnline lastSeen"
+					);
+					return res.status(200).json({
+						success: true,
+						message: "Chat already exists",
+						data: chat,
+					});
+				}
+
+				// Create new private chat with deterministic ID
+				chat = await Chat.create({
+					_id: chatId,
+					type: "private",
+					participants: participantIds.map((userId) => ({
+						user: userId,
+						role: "participant",
+						isActive: true,
+						joinedAt: new Date(),
+					})),
+					unreadCount: new Map(),
+				});
+			} else {
+				// For group chats, generate a unique ID
+				const groupChatId = new mongoose.Types.ObjectId().toString();
+
+				chat = await Chat.create({
+					_id: groupChatId,
+					type: "group",
+					name: name,
+					description: description,
+					participants: participantIds.map((userId) => ({
+						user: userId,
+						role: userId === creatorId.toString() ? "admin" : "member",
+						isActive: true,
+						joinedAt: new Date(),
+					})),
+					createdBy: creatorId,
+				});
+			}
+
+			// Populate chat with user details
+			await chat.populate(
+				"participants.user",
+				"username profilePicture isOnline lastSeen"
+			);
+			await chat.populate("createdBy", "username profilePicture");
+
+			res.status(201).json({
+				success: true,
+				message: "Chat created successfully",
+				data: chat,
+			});
+		} catch (error) {
+			console.error("Create chat error:", error);
+			res.status(500).json({
+				success: false,
+				message: "Internal server error",
+			});
+		}
+	}
+);
 
 /**
  * @swagger
@@ -472,40 +968,43 @@ router.post('/', [
  *       500:
  *         description: Internal server error
  */
-router.get('/:chatId', async (req, res) => {
-  try {
-    const { chatId } = req.params;
-    const userId = req.user._id;
+router.get("/:chatId", async (req, res) => {
+	try {
+		const { chatId } = req.params;
+		const userId = req.user._id;
 
-    const chat = await Chat.findOne({
-      _id: chatId,
-      'participants.user': userId,
-      'participants.isActive': true,
-      isActive: true
-    })
-    .populate('participants.user', 'username profilePicture isOnline lastSeen')
-    .populate('lastMessage.message')
-    .populate('lastMessage.sender', 'username profilePicture')
-    .populate('createdBy', 'username profilePicture');
+		const chat = await Chat.findOne({
+			_id: chatId,
+			"participants.user": userId,
+			"participants.isActive": true,
+			isActive: true,
+		})
+			.populate(
+				"participants.user",
+				"username profilePicture isOnline lastSeen"
+			)
+			.populate("lastMessage.message")
+			.populate("lastMessage.sender", "username profilePicture")
+			.populate("createdBy", "username profilePicture");
 
-    if (!chat) {
-      return res.status(404).json({
-        success: false,
-        message: 'Chat not found or access denied'
-      });
-    }
+		if (!chat) {
+			return res.status(404).json({
+				success: false,
+				message: "Chat not found or access denied",
+			});
+		}
 
-    res.json({
-      success: true,
-      data: chat
-    });
-  } catch (error) {
-    console.error('Get chat error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error'
-    });
-  }
+		res.json({
+			success: true,
+			data: chat,
+		});
+	} catch (error) {
+		console.error("Get chat error:", error);
+		res.status(500).json({
+			success: false,
+			message: "Internal server error",
+		});
+	}
 });
 
 // @route   POST /api/chats/:chatId/read
@@ -535,44 +1034,44 @@ router.get('/:chatId', async (req, res) => {
  *       500:
  *         description: Internal server error
  */
-router.post('/:chatId/read', async (req, res) => {
-  try {
-    const { chatId } = req.params;
-    const userId = req.user._id;
+router.post("/:chatId/read", async (req, res) => {
+	try {
+		const { chatId } = req.params;
+		const userId = req.user._id;
 
-    const chat = await Chat.findOne({
-      _id: chatId,
-      'participants.user': userId,
-      'participants.isActive': true,
-      isActive: true
-    });
+		const chat = await Chat.findOne({
+			_id: chatId,
+			"participants.user": userId,
+			"participants.isActive": true,
+			isActive: true,
+		});
 
-    if (!chat) {
-      return res.status(404).json({
-        success: false,
-        message: 'Chat not found or access denied'
-      });
-    }
+		if (!chat) {
+			return res.status(404).json({
+				success: false,
+				message: "Chat not found or access denied",
+			});
+		}
 
-    // Reset unread count for this user
-    chat.resetUnreadCount(userId);
-    await chat.save();
+		// Reset unread count for this user
+		chat.resetUnreadCount(userId);
+		await chat.save();
 
-    res.json({
-      success: true,
-      message: 'Chat marked as read',
-      data: {
-        chatId,
-        unreadCount: 0
-      }
-    });
-  } catch (error) {
-    console.error('Mark chat read error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error'
-    });
-  }
+		res.json({
+			success: true,
+			message: "Chat marked as read",
+			data: {
+				chatId,
+				unreadCount: 0,
+			},
+		});
+	} catch (error) {
+		console.error("Mark chat read error:", error);
+		res.status(500).json({
+			success: false,
+			message: "Internal server error",
+		});
+	}
 });
 
 module.exports = router;
