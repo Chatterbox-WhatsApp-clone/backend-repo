@@ -639,7 +639,7 @@ router.post("/favorite", async (req, res) => {
 
 /**
  * @swagger
- * /api/chats/favorite/{chatId}
+ * /api/chats/favorite/{chatId}:
  *   delete:
  *     summary: Get all favourite chats
  *     tags:

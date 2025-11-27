@@ -121,7 +121,7 @@ router.post("/get-or-create", async (req, res) => {
 
 /**
  * @swagger
- * /messages/starred/
+ * /messages/starred/:
  *   get:
  *     summary: Get Starred Messages
  *     tags:
@@ -370,19 +370,22 @@ router.delete("/clear/:chatId", async (req, res) => {
 
 /**
  * @swagger
- * /api/messages/clear/{chatId}:
+ * /api/messages/star:
  *   post:
- *     summary: Star a messages in a chat
+ *     summary: Star a message in a chat
  *     tags:
  *       - Messages
  *     security:
  *       - bearerAuth: []
- *     parameters:
- *       - name: messageId
- *         in: path
- *         required: true
- *         schema:
- *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               messageId:
+ *                 type: string
  *     responses:
  *       200:
  *         description: Message Starred
