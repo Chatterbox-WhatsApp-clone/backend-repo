@@ -22,7 +22,7 @@ const server = http.createServer(app);
 const io = socketIo(server, {
 	cors: {
 		origin: process.env.FRONTEND_URL || "http://localhost:3007",
-		methods: ["GET", "POST"],
+		methods: ["GET", "POST", "DELETE", "PUT",],
 		credentials: true
 	},
 });
