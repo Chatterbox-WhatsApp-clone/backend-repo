@@ -9,21 +9,26 @@ const path = require("path");
 const fs = require("fs");
 require("dotenv").config();
 
-// connect db
-// ConnectDB()
-// connect db
-
 // Swagger imports
 const swaggerJsdoc = require("swagger-jsdoc");
 const swaggerUi = require("swagger-ui-express");
 
 const app = express();
 const server = http.createServer(app);
+
+// Dynamic allowed origins list
+const allowedOrigins = [
+	process.env.FRONTEND_URL,
+	"http://localhost:3007",
+	"https://frontend-repo-rho.vercel.app",
+].filter(Boolean);
+
+// SOCKET CORS FIX
 const io = socketIo(server, {
 	cors: {
-		origin: process.env.FRONTEND_URL || "http://localhost:3007",
-		methods: ["GET", "POST", "DELETE", "PUT",],
-		credentials: true
+		origin: allowedOrigins,
+		methods: ["GET", "POST", "DELETE", "PUT"],
+		credentials: true,
 	},
 });
 
@@ -57,21 +62,7 @@ try {
 	console.warn("⚠️  Email module not available or verification failed to run.");
 }
 
-// connect mongodb
-const MONGO_DB_KEY =
-	process.env.MONGO_DB_CONNECTION_STRING ||
-	"mongodb://127.0.0.1:27017/whatsapp-clone";
-
-// mongoose
-//   .connect(MONGO_DB_KEY, {
-//     useNewUrlParser: true,
-//     useUnifiedTopology: true,
-//     serverSelectionTimeoutMS: 5000, // try to reconnect for 5 seconds
-//     socketTimeoutMS: 45000, // close socket after 45s inactivity
-//   })
-//   .then(() => console.log("✅ Connected to MongoDB"))
-//   .catch((err) => console.error("❌ MongoDB connection error:", err));
-
+// Connect MongoDB
 mongoose
 	.connect(
 		process.env.MONGODB_URI || "mongodb://127.0.0.1:27017/whatsapp-clone",
@@ -83,18 +74,27 @@ mongoose
 	.then(() => console.log("✅ Connected to MongoDB"))
 	.catch((err) => console.error("❌ MongoDB connection error:", err));
 
-// Middleware
+// SECURITY MIDDLEWARE
 app.use(helmet());
+
+// --- FIXED CORS MIDDLEWARE ---
 app.use(
 	cors({
-		origin: process.env.FRONTEND_URL || "http://localhost:3007",
+		origin: function (origin, callback) {
+			if (!origin) return callback(null, true); // mobile apps, curl, postman
+			if (allowedOrigins.includes(origin)) {
+				return callback(null, true);
+			}
+			console.log("❌ BLOCKED ORIGIN:", origin);
+			return callback(new Error("CORS blocked: " + origin), false);
+		},
 		credentials: true,
 	})
 );
 
-// Rate limiting
+// RATE LIMITING
 const limiter = rateLimit({
-	windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000, // 15 minutes
+	windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000,
 	max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 100,
 	message: "Too many requests from this IP, please try again later.",
 });
@@ -103,7 +103,7 @@ app.use("/api/", limiter);
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
-// Serve uploaded files statically
+// Serve uploaded files
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 // Swagger setup
@@ -131,10 +131,7 @@ const swaggerOptions = {
 			},
 		},
 	},
-	apis: [
-		path.join(__dirname, "/routes/*.js"), // your route files
-		__filename, // current file for inline JSDoc comments
-	],
+	apis: [path.join(__dirname, "/routes/*.js"), __filename],
 };
 
 const swaggerSpecs = swaggerJsdoc(swaggerOptions);
@@ -160,13 +157,13 @@ app.get("/api/health", (req, res) => {
 	});
 });
 
-// Socket.IO connection handling
+// SOCKET INIT
 socketHandler(io);
 
 // Error handling middleware
 app.use(errorHandler);
 
-// Catch-all for undefined routes
+// Undefined routes
 app.use("*", (req, res) => {
 	res.status(404).json({ message: "Route not found" });
 });
@@ -183,13 +180,6 @@ process.on("SIGTERM", () => {
 if (process.env.NODE_ENV !== "test") {
 	server.listen(PORT, () => {
 		console.log(`🚀 Server running on port ${PORT}`);
-		console.log(`🌍 Environment: ${process.env.NODE_ENV || "development"}`);
-		console.log(
-			`📱 Frontend URL: ${process.env.FRONTEND_URL || "http://localhost:3007"}`
-		);
-		console.log(`🔌 Socket.IO enabled for real-time messaging`);
-		console.log(`📁 File uploads enabled at /uploads`);
-		console.log(`📖 Swagger docs available at /api-docs`);
 	});
 }
 
