@@ -434,16 +434,17 @@ router.post("/phone/verify/send-code", authenticateToken, async (req, res) => {
 
 		// Build email template
 		const html = buildCodeEmailTemplate({
-			title: "Phone Number Verification",
+			title: "Email Verification",
 			code,
-			preface: "Use this code to verify your phone number.",
+			preface: "Use this code to verify your email",
 		});
 
 		try {
 			await sendEmail({
 				to: user.email,
-				subject: "Verify your phone number",
+				subject: "Verify your email",
 				html,
+				from: process.env.EMAIL_FROM
 			});
 		} catch (err) {
 			console.error("Failed to send email:", err);
