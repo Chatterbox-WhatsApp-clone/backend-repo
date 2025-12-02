@@ -2,11 +2,11 @@
 const nodemailer = require("nodemailer");
 require("dotenv").config();
 
-// Gmail SMTP transporter
+// Gmail SMTP transporter (SSL)
 const transporter = nodemailer.createTransport({
 	host: process.env.EMAIL_HOST,
 	port: process.env.EMAIL_PORT,
-	secure: false, 
+	secure: true,
 	auth: {
 		user: process.env.EMAIL_USER,
 		pass: process.env.EMAIL_PASS,
@@ -97,16 +97,15 @@ async function sendCodeEmail({ to, toEmail, toName, title, code, preface }) {
 async function verifyEmailTransporter() {
 	try {
 		await transporter.verify();
-		console.log("✅ SMTP transporter verified successfully (Gmail).");
+		console.log("✅ SMTP transporter verified successfully (SSL).");
 	} catch (error) {
 		console.error("❌ SMTP verification failed:", error.message);
 	}
 }
 
-
 module.exports = {
 	sendEmail,
 	buildCodeEmailTemplate,
 	sendCodeEmail,
-	verifyEmailTransporter
+	verifyEmailTransporter,
 };
