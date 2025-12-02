@@ -1,9 +1,17 @@
 // utils/email.js
-const sgMail = require("@sendgrid/mail");
+const nodemailer = require("nodemailer");
 require("dotenv").config();
 
-// Set SendGrid API key
-sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+// Gmail SMTP transporter
+const transporter = nodemailer.createTransport({
+	host: process.env.EMAIL_HOST,
+	port: process.env.EMAIL_PORT,
+	secure: false, 
+	auth: {
+		user: process.env.EMAIL_USER,
+		pass: process.env.EMAIL_PASS,
+	},
+});
 
 // Normalize recipient shapes
 function normalizeRecipient(params) {
@@ -22,34 +30,34 @@ function normalizeRecipient(params) {
 	);
 }
 
-// Generic email sender
+// Generic email sender (SMTP)
 async function sendEmail({ to, toEmail, toName, subject, html, text = "" }) {
 	const { email, name } = normalizeRecipient({ to, toEmail, toName });
 
-	if (!process.env.SENDGRID_FROM) {
-		throw new Error("SENDGRID_FROM environment variable is not set.");
+	if (!process.env.EMAIL_FROM) {
+		throw new Error("EMAIL_FROM environment variable is not set.");
 	}
 
-	const msg = {
-		to: { email, name },
+	const mailOptions = {
 		from: {
-			email: process.env.SENDGRID_FROM,
 			name: process.env.MAIL_FROM || "Chatterbox",
+			address: process.env.EMAIL_FROM,
 		},
+		to: { name, address: email },
 		subject: subject || "Message from Chatterbox",
-		text: text || html.replace(/<[^>]+>/g, ""), // fallback to plain text
 		html: html || "<p>No content</p>",
+		text: text || html.replace(/<[^>]+>/g, ""),
 	};
 
 	try {
-		await sgMail.send(msg);
-		return { provider: "sendgrid", ok: true };
+		await transporter.sendMail(mailOptions);
+		return { provider: "smtp", ok: true };
 	} catch (err) {
 		const error = new Error(
-			`Failed to send email via SendGrid: ${err?.message || err}`
+			`Failed to send email via SMTP: ${err?.message || err}`
 		);
 		error.cause = err;
-		error.provider = "sendgrid";
+		error.provider = "smtp";
 		throw error;
 	}
 }
@@ -85,8 +93,20 @@ async function sendCodeEmail({ to, toEmail, toName, title, code, preface }) {
 	});
 }
 
+// Transporter verification (optional startup check)
+async function verifyEmailTransporter() {
+	try {
+		await transporter.verify();
+		console.log("✅ SMTP transporter verified successfully (Gmail).");
+	} catch (error) {
+		console.error("❌ SMTP verification failed:", error.message);
+	}
+}
+
+
 module.exports = {
 	sendEmail,
 	buildCodeEmailTemplate,
 	sendCodeEmail,
+	verifyEmailTransporter
 };

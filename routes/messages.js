@@ -2,6 +2,7 @@ const express = require("express");
 const { body, validationResult } = require("express-validator");
 const Message = require("../models/Message");
 const Chat = require("../models/Chat");
+const { authenticateToken } = require("../middleware/auth");
 const {
 	uploadImage,
 	uploadVideo,
@@ -119,9 +120,68 @@ router.post("/get-or-create", async (req, res) => {
 	}
 });
 
+
 /**
  * @swagger
- * /messages/starred/:
+ * /api/messages/star:
+ *   post:
+ *     summary: Star a message in a chat
+ *     tags:
+ *       - Messages
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               messageId:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Message Starred
+ *       401:
+ *         description: Unauthorized
+ *       500:
+ *         description: Internal server error
+ */
+router.post("/star", authenticateToken, async (req, res) => {
+	try {
+		const { messageId } = req.body;
+		const userId = req.user._id;
+
+		const msg = await Message.findById(messageId);
+		if (!msg) {
+			return res.status(404).json({ error: "Message not found" });
+		}
+
+		// Star the message
+		await msg.starMessage(userId);
+
+		// Populate related fields before returning
+		const populatedMsg = await Message.findById(messageId)
+			.populate("sender", "username fullName profilePicture")
+			.populate({
+				path: "chat",
+				populate: {
+					path: "participants.user",
+					select: "username fullName phoneNumber profilePicture",
+				},
+			});
+
+		res.json({ success: true, data: populatedMsg });
+	} catch (err) {
+		console.error("Star message error:", err);
+		res.status(500).json({ error: "Failed to star message" });
+	}
+});
+
+
+/**
+ * @swagger
+ * /messages/starred
  *   get:
  *     summary: Get Starred Messages
  *     tags:
@@ -142,33 +202,30 @@ router.post("/get-or-create", async (req, res) => {
  *       500:
  *         description: Internal server error
  */
-router.get("/starred", async (req, res) => {
+router.get("/starred", authenticateToken, async (req, res) => {
 	try {
-		const userId = req.user._id;
+		const userId = new mongoose.Types.ObjectId(req.user._id);
 
-		// Find messages starred specifically by THIS user
 		const starredMessages = await Message.find({
-			starredBy: { $elemMatch: { user: userId } }
+			starredBy: { $elemMatch: { user: userId } },
 		})
 			.populate({
 				path: "chat",
 				populate: {
 					path: "participants.user",
-					select: "username fullName phoneNumber profilePicture"
-				}
+					select: "username fullName phoneNumber profilePicture",
+				},
 			})
 			.populate("sender", "username fullName profilePicture")
-			.sort({ createdAt: -1 });
+			.sort({ createdAt: -1 }); // newest → oldest
 
-		// Group by chat (WhatsApp Starred section)
 		const grouped = {};
 
-		starredMessages.forEach(msg => {
+		starredMessages.forEach((msg) => {
 			const chatId = msg.chat._id.toString();
 
-			// Find the OTHER person in the chat
 			const otherUser = msg.chat.participants.find(
-				p => p.user._id.toString() !== userId.toString()
+				(p) => p.user._id.toString() !== userId.toString()
 			)?.user;
 
 			if (!grouped[chatId]) {
@@ -179,15 +236,9 @@ router.get("/starred", async (req, res) => {
 						username: otherUser?.username,
 						phoneNumber: otherUser?.phoneNumber,
 						fullName: otherUser?.fullName,
-						profilePicture: otherUser?.profilePicture
+						profilePicture: otherUser?.profilePicture,
 					},
-					lastStarredMessage: {
-						_id: msg._id,
-						content: msg.content,
-						type: msg.type,
-						createdAt: msg.createdAt
-					},
-					messages: []
+					messages: [],
 				};
 			}
 
@@ -195,23 +246,38 @@ router.get("/starred", async (req, res) => {
 				_id: msg._id,
 				content: msg.content,
 				type: msg.type,
-				createdAt: msg.createdAt,
-				sender: msg.sender
+				createdAt: new Date(msg.createdAt), // IMPORTANT FIX
+				sender: msg.sender,
 			});
+		});
+
+		// Compute last message properly
+		const result = Object.values(grouped).map((chat) => {
+			if (chat.messages.length > 0) {
+				chat.messages.sort((a, b) => a.createdAt - b.createdAt);
+
+				chat.lastStarredMessage = chat.messages[chat.messages.length - 1];
+			} else {
+				chat.lastStarredMessage = null;
+			}
+
+			return chat;
 		});
 
 		return res.json({
 			success: true,
-			data: Object.values(grouped)
+			data: result,
 		});
 	} catch (err) {
 		console.error("Starred fetch error:", err);
 		return res.status(500).json({
 			success: false,
-			error: "Failed to fetch starred messages"
+			error: "Failed to fetch starred messages",
 		});
 	}
 });
+
+
 
 /**
  * @swagger
@@ -368,11 +434,12 @@ router.delete("/clear/:chatId", async (req, res) => {
 	}
 });
 
+
 /**
  * @swagger
- * /api/messages/star:
+ * /api/messages/unstar:
  *   post:
- *     summary: Star a message in a chat
+ *     summary: Unstar a message
  *     tags:
  *       - Messages
  *     security:
@@ -388,30 +455,30 @@ router.delete("/clear/:chatId", async (req, res) => {
  *                 type: string
  *     responses:
  *       200:
- *         description: Message Starred
+ *         description: Message Unstarred
  *       401:
  *         description: Unauthorized
  *       500:
  *         description: Internal server error
  */
-router.post("/star", async (req, res) => {
+router.post("/unstar", authenticateToken, async (req, res) => {
 	try {
 		const { messageId } = req.body;
+		const userId = req.user._id;
 
-		const msg = await Message.findByIdAndUpdate(
-			messageId,
-			{ isStarred: true },
-			{ new: true }
-		);
+		const msg = await Message.findById(messageId);
+		if (!msg) {
+			return res.status(404).json({ error: "Message not found" });
+		}
 
-		res.json(msg);
+		await msg.unstarMessage(userId);
+
+		res.json({ success: true, data: msg });
 	} catch (err) {
-		res.status(500).json({ error: "Failed to star message" });
+		console.error("Unstar message error:", err);
+		res.status(500).json({ error: "Failed to unstar message" });
 	}
 });
-
-
-
 
 /**
  * @swagger
@@ -556,9 +623,6 @@ router.post(
 	}
 );
 
-// @route   POST /api/messages/:chatId/upload-image
-// @desc    Upload and send an image message
-// @access  Private
 /**
  * @swagger
  * /api/messages/{chatId}/upload-image:
@@ -675,9 +739,6 @@ router.post(
 	}
 );
 
-// @route   POST /api/messages/:chatId/upload-video
-// @desc    Upload and send a video message
-// @access  Private
 /**
  * @swagger
  * /api/messages/{chatId}/upload-video:
@@ -1032,9 +1093,6 @@ router.post(
 	}
 );
 
-// @route   PUT /api/messages/:messageId
-// @desc    Edit a message
-// @access  Private
 /**
  * @swagger
  * /api/messages/{messageId}:

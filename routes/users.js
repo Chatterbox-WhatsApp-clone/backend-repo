@@ -280,10 +280,10 @@ router.put(
 					field === "username"
 						? "Username is already taken"
 						: field === "email"
-						? "Email is already in use"
-						: field === "phoneNumber"
-						? "Phone number is already in use"
-						: `${field} already exists`;
+							? "Email is already in use"
+							: field === "phoneNumber"
+								? "Phone number is already in use"
+								: `${field} already exists`;
 
 				return res.status(400).json({ success: false, message });
 			}
@@ -409,24 +409,53 @@ router.delete("/me", authenticateToken, async (req, res) => {
 router.post("/phone/verify/send-code", authenticateToken, async (req, res) => {
 	try {
 		const user = await User.findById(req.user._id).exec();
+		if (!user) {
+			return res
+				.status(404)
+				.json({ success: false, message: "User not found" });
+		}
+
+		// Generate 6-digit code
 		const code = Math.floor(100000 + Math.random() * 900000).toString();
+
+		// Save code and expiration
 		user.phoneVerificationCode = code;
 		user.phoneVerificationExpires = Date.now() + 15 * 60 * 1000; // 15 minutes
-		await user.save();
+
+		try {
+			await user.save();
+			console.log("Saved verification code:", code, "for user:", user._id);
+		} catch (err) {
+			console.error("Failed to save verification code:", err);
+			return res
+				.status(500)
+				.json({ success: false, message: "Failed to save code" });
+		}
+
+		// Build email template
 		const html = buildCodeEmailTemplate({
 			title: "Phone Number Verification",
 			code,
 			preface: "Use this code to verify your phone number.",
 		});
-		await sendEmail({
-			to: user.email,
-			subject: "Verify your phone number",
-			html,
-		});
+
+		try {
+			await sendEmail({
+				to: user.email,
+				subject: "Verify your phone number",
+				html,
+			});
+		} catch (err) {
+			console.error("Failed to send email:", err);
+			return res
+				.status(500)
+				.json({ success: false, message: "Failed to send email" });
+		}
+
 		res.json({
 			success: true,
 			message:
-				"Verification code sent to your email. Please Check your junk folder",
+				"Verification code sent to your email. Please check your junk folder.",
 		});
 	} catch (error) {
 		console.error("Send phone verification code error:", error);
@@ -465,22 +494,51 @@ router.post(
 			if (!errors.isEmpty()) {
 				return res.status(400).json({ success: false, errors: errors.array() });
 			}
+
 			const { code } = req.body;
 			const user = await User.findById(req.user._id).exec();
+			if (!user) {
+				return res
+					.status(404)
+					.json({ success: false, message: "User not found" });
+			}
+
+			console.log("Stored code:", user.phoneVerificationCode);
+			console.log("Provided code:", code);
+
 			if (
-				!user ||
-				user.phoneVerificationCode !== code ||
+				!user.phoneVerificationCode ||
+				user.phoneVerificationCode.toString().trim() !== code.toString().trim()
+			) {
+				return res
+					.status(400)
+					.json({ success: false, message: "Invalid code" });
+			}
+
+			if (
 				!user.phoneVerificationExpires ||
 				user.phoneVerificationExpires < Date.now()
 			) {
 				return res
 					.status(400)
-					.json({ success: false, message: "Invalid or expired code" });
+					.json({ success: false, message: "Code expired" });
 			}
+
+			// Mark phone as verified and clear code
 			user.phoneVerified = true;
 			user.phoneVerificationCode = undefined;
 			user.phoneVerificationExpires = undefined;
-			await user.save();
+
+			try {
+				await user.save();
+				console.log("Phone verified for user:", user._id);
+			} catch (err) {
+				console.error("Mongoose save error:", err);
+				return res
+					.status(500)
+					.json({ success: false, message: "Failed to update user" });
+			}
+
 			res.json({ success: true, message: "Phone number verified" });
 		} catch (error) {
 			console.error("Verify phone error:", error);
@@ -490,6 +548,7 @@ router.post(
 		}
 	}
 );
+
 
 /**
  * @swagger

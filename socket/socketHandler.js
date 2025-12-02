@@ -133,13 +133,13 @@ const socketHandler = (io) => {
 						return socket.emit("message_error", {
 							message: "Chat not found & receiverId missing",
 						});
-					
+
 					// Generate deterministic chat ID for private chat
 					const deterministicChatId = Chat.generatePrivateChatId(senderId, receiverId);
-					
+
 					// Try to find chat by deterministic ID
 					chat = await Chat.findById(deterministicChatId);
-					
+
 					if (!chat) {
 						// Create new private chat with deterministic ID
 						chat = await Chat.create({
@@ -174,14 +174,23 @@ const socketHandler = (io) => {
 				};
 
 				if (type === "text") messageData.content.text = content;
-				if (media && media.filename && media.base64) {
-					const mediaUrl = saveMediaFile(media.filename, media.base64);
-					messageData.content.media = {
-						url: mediaUrl,
-						filename: media.filename,
-						mimeType: media.mimeType || "",
-						size: media.size || 0,
-					};
+				if (media) {
+					if (media.url) {
+						messageData.content.media = {
+							url: media.url,
+							filename: media.filename,
+							mimeType: media.mimeType || "",
+							size: media.size || 0,
+						};
+					} else if (media.filename && media.base64) {
+						const mediaUrl = saveMediaFile(media.filename, media.base64);
+						messageData.content.media = {
+							url: mediaUrl,
+							filename: media.filename,
+							mimeType: media.mimeType || "",
+							size: media.size || 0,
+						};
+					}
 				}
 
 				const message = new Message(messageData);

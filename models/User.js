@@ -82,6 +82,12 @@ const userSchema = new mongoose.Schema(
 		authProvider: { type: String, default: "email" },
 
 		phoneVerified: { type: Boolean, default: false },
+
+		phoneVerificationCode: { type: String },
+		phoneVerificationExpires: { type: Date },
+
+		resetPasswordToken: { type: String },
+		resetPasswordExpires: { type: Date },
 	},
 	{ timestamps: true }
 );
@@ -158,6 +164,8 @@ userSchema.set("toJSON", {
 		delete ret.verificationToken;
 		delete ret.resetPasswordToken;
 		delete ret.resetPasswordExpires;
+		delete ret.phoneVerificationCode;
+		delete ret.phoneVerificationExpires;
 		return ret;
 	},
 });
@@ -233,5 +241,6 @@ userSchema.methods.setOffline = async function () {
 	this.lastSeen = new Date();
 	await this.save();
 };
+
 
 module.exports = mongoose.model("User", userSchema);
