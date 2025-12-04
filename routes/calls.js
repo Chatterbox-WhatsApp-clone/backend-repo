@@ -736,7 +736,7 @@ router.delete('/:callId', async (req, res) => {
       });
     }
 
-    // Soft delete the call
+    // hard delete the call
     call.isActive = false;
     await call.save();
 

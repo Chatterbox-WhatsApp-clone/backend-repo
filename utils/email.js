@@ -5,15 +5,15 @@ require("dotenv").config();
 // Gmail SMTP transporter (SSL)
 const transporter = nodemailer.createTransport({
 	host: process.env.EMAIL_HOST,
-	port: process.env.EMAIL_PORT,
-	secure: true,
+	port: Number(process.env.EMAIL_PORT) || 465,
+	secure: true, // true for port 465 (SSL)
 	auth: {
 		user: process.env.EMAIL_USER,
 		pass: process.env.EMAIL_PASS,
 	},
 });
 
-// Normalize recipient shapes
+// Normalize recipient info
 function normalizeRecipient(params) {
 	if (params.to && typeof params.to === "string") {
 		return { email: params.to, name: params.toName || "User" };
@@ -30,7 +30,7 @@ function normalizeRecipient(params) {
 	);
 }
 
-// Generic email sender (SMTP)
+// Generic email sender
 async function sendEmail({ to, toEmail, toName, subject, html, text = "" }) {
 	const { email, name } = normalizeRecipient({ to, toEmail, toName });
 
@@ -62,7 +62,7 @@ async function sendEmail({ to, toEmail, toName, subject, html, text = "" }) {
 	}
 }
 
-// Build reset/verification code email
+// Build verification/reset code email template
 function buildCodeEmailTemplate({ title, code, preface }) {
 	return `
     <!DOCTYPE html>
@@ -93,11 +93,11 @@ async function sendCodeEmail({ to, toEmail, toName, title, code, preface }) {
 	});
 }
 
-// Transporter verification (optional startup check)
+// Optional: verify transporter on startup
 async function verifyEmailTransporter() {
 	try {
 		await transporter.verify();
-		console.log("✅ SMTP transporter verified successfully (SSL).");
+		console.log("✅ SMTP transporter verified successfully (Gmail).");
 	} catch (error) {
 		console.error("❌ SMTP verification failed:", error.message);
 	}

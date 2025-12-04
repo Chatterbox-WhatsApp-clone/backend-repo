@@ -368,7 +368,10 @@ router.get("/", async (req, res) => {
 		const { page = 1, limit = 20 } = req.query;
 		const userId = req.user._id;
 
-		// Fetch all chats
+		// Fetch current user with blockedUsers and contacts
+		const currentUser = await User.findById(userId).select("blockedUsers contacts");
+
+		// Fetch all chats for the user
 		const chats = await Chat.find({
 			type: "private",
 			"participants.user": userId,
@@ -377,50 +380,78 @@ router.get("/", async (req, res) => {
 		})
 			.populate(
 				"participants.user",
-				"username fullName profilePicture isOnline lastSeen"
+				"username fullName profilePicture isOnline lastSeen isActive isDeleted"
 			)
 			.populate("favorites.user", "_id")
 			.sort({ updatedAt: -1 });
 
 		const chatList = await Promise.all(
 			chats.map(async (chat) => {
+				// Find the other participant
 				const otherParticipant = chat.participants.find(
-					(p) => String(p.user._id) !== String(userId)
+					(p) => p.user && String(p.user._id) !== String(userId)
 				);
-				if (!otherParticipant) return null;
 
-				// ⭐️ CHECK IF USER HAS FAVORITED THIS CHAT
+				// If no valid other participant → drop chat
+				if (!otherParticipant || !otherParticipant.user) return null;
+
+				const otherUser = otherParticipant.user;
+
+				// ❌ Remove if other user is deleted or inactive
+				if (otherUser.isDeleted === true) return null;
+				if (otherUser.isActive === false) return null;
+
+				// Check if this chat is favourited by current user
 				const isFavourite = chat.favorites.some(
 					(f) => String(f.user?._id || f.user) === String(userId)
 				);
 
-				// ⭐ Get last message
-				const lastMessage = await Message.findOne({ chat: chat._id })
-					.sort({ createdAt: -1 })
-					.populate("sender", "username fullName profilePicture");
+				// 🚫 BLOCK: Check if current user has blocked the other user
+				// 🚫 BLOCK: Check if current user has blocked the other user
+				const isBlocked = currentUser.blockedUsers?.some(
+					(blockedId) => String(blockedId) === String(otherUser._id)
+				);
 
-				const unreadCount = chat.unreadCount?.get(userId.toString()) || 0;
+				// ⭐ Fetch last visible message
+				// If blocked: hide all messages for the blocker
+				// If not blocked: show messages not deleted
+				let lastMessage = null;
+				if (isBlocked) {
+					// BLOCK: Messages hidden only for the blocker
+					lastMessage = null;
+				} else {
+					// Normal: Fetch last visible (not deleted) message
+					lastMessage = await Message.findOne({
+						chat: chat._id,
+						isDeleted: { $ne: true },
+					})
+						.sort({ createdAt: -1 })
+						.populate("sender", "username fullName profilePicture");
+				}
+
+				const unreadCount = isBlocked
+					? 0
+					: chat.unreadCount?.get(userId.toString()) || 0;
 
 				return {
 					chatId: chat._id,
-					user: otherParticipant.user,
+					user: otherUser,
 
-					// ⭐ last message object
 					lastMessage: lastMessage
 						? {
-							_id: lastMessage._id,
-							content: lastMessage.content,
-							type: lastMessage.type,
-							sender: lastMessage.sender,
-							createdAt: lastMessage.createdAt,
-						}
+								_id: lastMessage._id,
+								content: lastMessage.content,
+								type: lastMessage.type,
+								sender: lastMessage.sender,
+								createdAt: lastMessage.createdAt,
+						  }
 						: null,
 
-					// ⭐ which time to sort by
 					lastMessageTime: lastMessage ? lastMessage.createdAt : null,
 
 					unreadCount,
 					isFavourite,
+					isBlocked, // 🚫 Return blocked status
 					isActive: chat.isActive,
 					createdAt: chat.createdAt,
 					updatedAt: chat.updatedAt,
@@ -428,9 +459,10 @@ router.get("/", async (req, res) => {
 			})
 		);
 
+		// Remove nulls + removed/deleted users
 		const filteredChats = chatList.filter(Boolean);
 
-		// ⭐ Sort by most recent
+		// Sort by most recent chat
 		filteredChats.sort((a, b) => {
 			const aTime = a.lastMessageTime
 				? new Date(a.lastMessageTime).getTime()
@@ -441,6 +473,7 @@ router.get("/", async (req, res) => {
 			return bTime - aTime;
 		});
 
+		// Pagination
 		const paginatedChats = filteredChats.slice(
 			(page - 1) * limit,
 			page * limit
@@ -459,9 +492,12 @@ router.get("/", async (req, res) => {
 		});
 	} catch (error) {
 		console.error("Get chats error:", error);
-		res.status(500).json({ success: false, message: "Internal server error" });
+		res
+			.status(500)
+			.json({ success: false, message: "Internal server error" });
 	}
 });
+
 
 /**
  * @swagger
@@ -754,14 +790,16 @@ router.delete("/favorite/:chatId", async (req, res) => {
 router.delete("/chats/delete/:chatId", async (req, res) => {
 	try {
 		const { chatId } = req.params;
+		const userId = req.user._id;
 
+		// Remove authenticated user from participants
 		await Chat.findByIdAndUpdate(chatId, {
-			isActive: false,
+			$pull: { participants: { user: userId } },
 		});
 
 		return res.status(200).json({
 			success: true,
-			message: "Chat deleted",
+			message: "Chat removed for user",
 		});
 	} catch (error) {
 		console.error("Error deleting chat:", error);
@@ -771,6 +809,7 @@ router.delete("/chats/delete/:chatId", async (req, res) => {
 		});
 	}
 });
+
 
 /**
  * @swagger

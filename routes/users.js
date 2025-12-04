@@ -5,6 +5,9 @@ const { authenticateToken } = require("../middleware/auth");
 const { sendEmail, buildCodeEmailTemplate } = require("../utils/email");
 const FriendRequest = require("../models/FriendRequest");
 const router = express.Router();
+const Message = require("../models/Message");
+const Chat = require("../models/Chat");
+
 
 const multer = require("multer");
 const path = require("path");
@@ -1260,6 +1263,72 @@ router.get("/online/:token", authenticateToken, async (req, res) => {
 	} catch (error) {
 		console.error("Get online users (token path) error:", error);
 		res.status(500).json({ success: false, message: "Internal server error" });
+	}
+});
+/**
+ * @swagger
+ * /api/users/delete-account:
+ *   delete:
+ *     summary: Permanently delete your account
+ *     description: This action is irreversible. Deletes the user and hard-deletes all their messages.
+ *     tags:
+ *       - Users
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Account permanently deleted
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *       401:
+ *         description: Unauthorized
+ *       404:
+ *         description: User not found
+ *       500:
+ *         description: Internal server error
+ */
+router.delete("/delete-account", authenticateToken, async (req, res) => {
+	try {
+		const userId = req.user._id;
+
+		// Check if user exists
+		const user = await User.findById(userId);
+		if (!user) {
+			return res.status(404).json({
+				success: false,
+				message: "User not found",
+			});
+		}
+
+		// HARD DELETE: remove user permanently
+		await User.findByIdAndDelete(userId);
+
+		// Optionally, remove all chats where the user is a participant
+		await Chat.deleteMany({ "participants.user": userId });
+
+		// Optionally, remove all messages sent or received by this user
+		await Message.deleteMany({
+			$or: [{ sender: userId }, { receiver: userId }],
+		});
+
+		return res.status(200).json({
+			success: true,
+			message:
+				"Your account, chats, and messages have been permanently deleted",
+		});
+	} catch (error) {
+		console.error("DELETE ACCOUNT ERROR:", error);
+		return res.status(500).json({
+			success: false,
+			message: "Internal server error",
+		});
 	}
 });
 

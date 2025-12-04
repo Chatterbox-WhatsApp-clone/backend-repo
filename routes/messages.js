@@ -217,51 +217,38 @@ router.get("/starred", authenticateToken, async (req, res) => {
 				},
 			})
 			.populate("sender", "username fullName profilePicture")
-			.sort({ createdAt: -1 }); // newest → oldest
+			.sort({ createdAt: -1 });
 
-		const grouped = {};
+		// ⭐ FIX: filter out items with no chat
+		const filtered = starredMessages.filter(
+			(msg) => msg.chat && msg.chat.participants
+		);
 
-		starredMessages.forEach((msg) => {
-			const chatId = msg.chat._id.toString();
+		const result = filtered.map((msg) => {
+			const chat = msg.chat;
 
-			const otherUser = msg.chat.participants.find(
-				(p) => p.user._id.toString() !== userId.toString()
+			// get the other user safely
+			const otherUser = chat.participants.find(
+				(p) => p.user && p.user._id.toString() !== userId.toString()
 			)?.user;
 
-			if (!grouped[chatId]) {
-				grouped[chatId] = {
-					chatId,
-					user: {
-						_id: otherUser?._id,
-						username: otherUser?.username,
-						phoneNumber: otherUser?.phoneNumber,
-						fullName: otherUser?.fullName,
-						profilePicture: otherUser?.profilePicture,
-					},
-					messages: [],
-				};
-			}
-
-			grouped[chatId].messages.push({
+			return {
 				_id: msg._id,
+				chatId: chat._id,
+				user: otherUser
+					? {
+							_id: otherUser._id,
+							username: otherUser.username,
+							fullName: otherUser.fullName,
+							phoneNumber: otherUser.phoneNumber,
+							profilePicture: otherUser.profilePicture,
+					  }
+					: null,
 				content: msg.content,
 				type: msg.type,
-				createdAt: new Date(msg.createdAt), // IMPORTANT FIX
 				sender: msg.sender,
-			});
-		});
-
-		// Compute last message properly
-		const result = Object.values(grouped).map((chat) => {
-			if (chat.messages.length > 0) {
-				chat.messages.sort((a, b) => a.createdAt - b.createdAt);
-
-				chat.lastStarredMessage = chat.messages[chat.messages.length - 1];
-			} else {
-				chat.lastStarredMessage = null;
-			}
-
-			return chat;
+				createdAt: msg.createdAt,
+			};
 		});
 
 		return res.json({
@@ -276,6 +263,7 @@ router.get("/starred", authenticateToken, async (req, res) => {
 		});
 	}
 });
+
 
 
 
@@ -419,10 +407,15 @@ router.delete("/clear/:chatId", async (req, res) => {
 	try {
 		const { chatId } = req.params;
 
-		await Message.deleteMany({ chat: chatId });
+		const id = new mongoose.Types.ObjectId(chatId);
+
+		const result = await Message.deleteMany({
+			$or: [{ chat: id }, { "chat._id": id }],
+		});
 
 		return res.status(200).json({
 			success: true,
+			deleted: result.deletedCount,
 			message: "Messages cleared",
 		});
 	} catch (error) {
@@ -433,6 +426,7 @@ router.delete("/clear/:chatId", async (req, res) => {
 		});
 	}
 });
+
 
 
 /**
@@ -510,118 +504,62 @@ router.post("/unstar", authenticateToken, async (req, res) => {
  *       500:
  *         description: Internal server error
  */
+router.post("/:chatId", async (req, res) => {
+	try {
+		const { chatId } = req.params;
+		const { content } = req.body; // content should be the string input
 
-router.post(
-	"/:chatId",
-	[
-		body("type")
-			.isIn([
-				"text",
-				"image",
-				"video",
-				"audio",
-				"document",
-				"location",
-				"contact",
-				"sticker",
-			])
-			.withMessage("Invalid message type"),
-		body("content.text")
-			.optional()
-			.isLength({ max: 4000 })
-			.withMessage("Text message cannot exceed 4000 characters"),
-	],
-	async (req, res) => {
-		try {
-			const errors = validationResult(req);
-			if (!errors.isEmpty()) {
-				return res.status(400).json({
-					success: false,
-					errors: errors.array(),
-				});
-			}
-
-			const { chatId } = req.params;
-			const { type, content, replyTo } = req.body;
-
-			// Check if user is participant in the chat
-			const chat = await Chat.findOne({
-				_id: chatId,
-				"participants.user": req.user._id,
-				"participants.isActive": true,
-				isActive: true,
-			});
-
-			if (!chat) {
-				return res.status(404).json({
-					success: false,
-					message: "Chat not found",
-				});
-			}
-
-			// Validate content based on type
-			if (
-				type === "text" &&
-				(!content.text || content.text.trim().length === 0)
-			) {
-				return res.status(400).json({
-					success: false,
-					message: "Text content is required for text messages",
-				});
-			}
-
-			// Create message
-			const message = new Message({
-				chat: chatId,
-				sender: req.user._id,
-				type,
-				content,
-				replyTo,
-			});
-
-			await message.save();
-
-			// Update chat's last message
-			const preview =
-				type === "text" ? content.text.substring(0, 100) : `📎 ${type}`;
-			chat.updateLastMessage(message, req.user, preview);
-			chat.incrementUnreadCount(req.user._id);
-			await chat.save();
-
-			// Enqueue delivery job
-			try {
-				const { messageQueue } = require("../queue/messageQueue");
-				await messageQueue.add(
-					"deliver",
-					{ messageId: message._id.toString() },
-					{
-						jobId: `message:${message._id.toString()}`,
-					}
-				);
-			} catch (e) {
-				console.error("Failed to enqueue message delivery job", e);
-			}
-
-			// Populate message for response
-			await message.populate("sender", "username profilePicture");
-			if (replyTo) {
-				await message.populate("replyTo", "content type sender");
-			}
-
-			res.status(201).json({
-				success: true,
-				message: "Message sent successfully",
-				data: message,
-			});
-		} catch (error) {
-			console.error("Send message error:", error);
-			res.status(500).json({
+		if (!content || content.trim().length === 0) {
+			return res.status(400).json({
 				success: false,
-				message: "Internal server error",
+				message: "Content is required",
 			});
 		}
+
+		// Check if user is participant
+		const chat = await Chat.findOne({
+			_id: chatId,
+			"participants.user": req.user._id,
+			"participants.isActive": true,
+			isActive: true,
+		});
+
+		if (!chat) {
+			return res.status(404).json({
+				success: false,
+				message: "Chat not found",
+			});
+		}
+
+		// Create message: content is always an object with `text`
+		const message = new Message({
+			chat: chatId,
+			sender: req.user._id,
+			type: "text",
+			content: { text: content.trim() },
+		});
+
+		await message.save();
+
+		// Update last message preview
+		const preview = content.trim().substring(0, 100);
+		chat.updateLastMessage(message, req.user, preview);
+		chat.incrementUnreadCount(req.user._id);
+		await chat.save();
+
+		// Respond with populated message
+		await message.populate("sender", "username profilePicture");
+		res.status(201).json({
+			success: true,
+			message: "Message sent successfully",
+			data: message,
+		});
+	} catch (err) {
+		console.error(err);
+		res.status(500).json({ success: false, message: "Internal server error" });
 	}
-);
+});
+
 
 /**
  * @swagger
@@ -1245,17 +1183,8 @@ router.delete("/:messageId", async (req, res) => {
 			});
 		}
 
-		// Check if message is too old to delete (e.g., 1 hour)
-		const deleteTimeLimit = 60 * 60 * 1000; // 1 hour in milliseconds
-		if (Date.now() - message.createdAt.getTime() > deleteTimeLimit) {
-			return res.status(400).json({
-				success: false,
-				message: "Message is too old to delete",
-			});
-		}
-
-		// Soft delete message
-		message.softDelete(req.user._id);
+		// hard delete (must NOT call save() internally)
+		message.hardDelete(req.user._id);
 		await message.save();
 
 		res.json({
@@ -1270,5 +1199,6 @@ router.delete("/:messageId", async (req, res) => {
 		});
 	}
 });
+
 
 module.exports = router;

@@ -1220,24 +1220,22 @@ router.delete("/unfriend/:friendId", authenticateToken, async (req, res) => {
 			});
 		}
 
-		// Delete ALL friend requests between both users, no matter the status
-		const deleted = await FriendRequest.deleteMany({
+		// 1️⃣ Remove from each other's friends list
+		await User.updateOne({ _id: userId }, { $pull: { friends: friendId } });
+
+		await User.updateOne({ _id: friendId }, { $pull: { friends: userId } });
+
+		// 2️⃣ Delete ALL friend requests between both users
+		await FriendRequest.deleteMany({
 			$or: [
 				{ sender: userId, receiver: friendId },
 				{ sender: friendId, receiver: userId },
 			],
 		});
 
-		if (deleted.deletedCount === 0) {
-			return res.status(404).json({
-				success: false,
-				message: "No friendship found between users",
-			});
-		}
-
 		return res.json({
 			success: true,
-			message: "Friendship fully removed",
+			message: "User removed from friends list",
 		});
 	} catch (error) {
 		console.error("🔥 Unfriend error:", error);
@@ -1247,6 +1245,7 @@ router.delete("/unfriend/:friendId", authenticateToken, async (req, res) => {
 		});
 	}
 });
+
 
 /**
  * @swagger
@@ -1346,6 +1345,17 @@ router.delete(
 				friend: friendObjectId,
 				expiresAt,
 			});
+
+			// Remove from friends list
+			await User.updateOne(
+				{ _id: currentUserObjectId },
+				{ $pull: { friends: friendObjectId } }
+			);
+
+			await User.updateOne(
+				{ _id: friendObjectId },
+				{ $pull: { friends: currentUserObjectId } }
+			);
 
 			return res.json({
 				success: true,

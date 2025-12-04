@@ -258,7 +258,7 @@ messageSchema.methods.removeReaction = function (userId) {
 	return this.save();
 };
 
-messageSchema.methods.softDelete = function (userId) {
+messageSchema.methods.hardDelete = function (userId) {
 	if (!this.isDeleted) {
 		this.isDeleted = true;
 		this.deletedBy.push({
@@ -266,7 +266,6 @@ messageSchema.methods.softDelete = function (userId) {
 			deletedAt: new Date(),
 		});
 	}
-	return this.save();
 };
 
 messageSchema.methods.editMessage = function (newContent) {
