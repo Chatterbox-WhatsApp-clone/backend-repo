@@ -68,6 +68,7 @@ const userSchema = new mongoose.Schema(
 		],
 
 		status: { type: String, default: "Hey there! I'm using Chatterbox." },
+		isActive: { type: Boolean, default: true },
 
 		isOnline: { type: Boolean, default: false },
 
@@ -202,7 +203,6 @@ userSchema.methods.blockUser = async function (userIdToBlock) {
 	return this;
 };
 
-
 // Unblock a user
 userSchema.methods.unblockUser = async function (userIdToUnblock) {
 	const userIdStr = userIdToUnblock.toString();
@@ -223,7 +223,6 @@ userSchema.methods.unblockUser = async function (userIdToUnblock) {
 	return this;
 };
 
-
 // Check if blocked
 userSchema.methods.isBlocked = function (userId) {
 	const userIdStr = userId.toString();
@@ -241,6 +240,5 @@ userSchema.methods.setOffline = async function () {
 	this.lastSeen = new Date();
 	await this.save();
 };
-
 
 module.exports = mongoose.model("User", userSchema);

@@ -1333,3 +1333,5 @@ router.delete("/delete-account", authenticateToken, async (req, res) => {
 });
 
 module.exports = router;
+
+// Integrating real time messaging and voice/video calling using Socket.IO.
