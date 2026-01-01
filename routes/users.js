@@ -313,24 +313,52 @@ router.put(
 router.post(
 	"/background-image",
 	authenticateToken,
-	uploadImage.single("backgroundImage"),
-	async (req, res) => {
-		if (!req.file) {
-			return res
-				.status(400)
-				.json({ success: false, message: "No file uploaded" });
-		}
-
-		const user = await User.findById(req.user._id);
-		user.backgroundImage = req.file.path;
-		await user.save();
-
-		res.json({
-			success: true,
-			backgroundImage: user.backgroundImage,
+	(req, res, next) => {
+		uploadImage.single("backgroundImage")(req, res, (err) => {
+			if (err) return handleUploadError(err, req, res, next);
+			next();
 		});
+	},
+	async (req, res) => {
+		try {
+			if (!req.file) {
+				return res
+					.status(400)
+					.json({ success: false, message: "No file uploaded" });
+			}
+
+			if (!req.user || !req.user._id) {
+				return res
+					.status(401)
+					.json({ success: false, message: "Unauthorized" });
+			}
+
+			const user = await User.findById(req.user._id);
+			if (!user) {
+				return res
+					.status(404)
+					.json({ success: false, message: "User not found" });
+			}
+
+			// Cloudinary URL
+			user.backgroundImage = req.file.path;
+
+			await user.save();
+
+			res.json({
+				success: true,
+				backgroundImage: user.backgroundImage,
+			});
+		} catch (error) {
+			console.error("Background image error:", error);
+			res.status(500).json({
+				success: false,
+				message: "Internal server error",
+			});
+		}
 	}
 );
+
 
 /**
  * @swagger
