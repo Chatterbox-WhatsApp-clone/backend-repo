@@ -9,7 +9,7 @@ const Message = require("../models/Message");
 const Chat = require("../models/Chat");
 
 
-const { uploadImage } = require("../middleware/upload");
+const { uploadImage, handleUploadError } = require("../middleware/upload");
 // Local storage config removed in favor of Cloudinary middleware
 
 // module.exports = upload; (Removed)
@@ -310,54 +310,29 @@ router.put(
  *       500:
  *         description: Internal server error
  */
-router.post(
-	"/background-image",
-	authenticateToken,
-	(req, res, next) => {
-		uploadImage.single("backgroundImage")(req, res, (err) => {
-			if (err) return handleUploadError(err, req, res, next);
-			next();
-		});
-	},
-	async (req, res) => {
-		try {
-			if (!req.file) {
-				return res
-					.status(400)
-					.json({ success: false, message: "No file uploaded" });
-			}
+router.post("/background-image", (req, res) => {
+	// Single image upload, field name must match frontend FormData
+	uploadImage.single("backgroundImage")(req, res, (err) => {
+		// Handle any multer or custom upload errors
+		if (err) return handleUploadError(err, req, res);
 
-			if (!req.user || !req.user._id) {
-				return res
-					.status(401)
-					.json({ success: false, message: "Unauthorized" });
-			}
-
-			const user = await User.findById(req.user._id);
-			if (!user) {
-				return res
-					.status(404)
-					.json({ success: false, message: "User not found" });
-			}
-
-			// Cloudinary URL
-			user.backgroundImage = req.file.path;
-
-			await user.save();
-
-			res.json({
-				success: true,
-				backgroundImage: user.backgroundImage,
-			});
-		} catch (error) {
-			console.error("Background image error:", error);
-			res.status(500).json({
+		// No file uploaded
+		if (!req.file) {
+			return res.status(400).json({
 				success: false,
-				message: "Internal server error",
+				error: "No file uploaded. Please select an image.",
 			});
 		}
-	}
-);
+
+		// Success: send back Cloudinary URL
+		res.status(200).json({
+			success: true,
+			message: "Background image uploaded successfully",
+			image: req.file.path, // Cloudinary URL
+		});
+	});
+});
+
 
 
 /**
