@@ -310,28 +310,44 @@ router.put(
  *       500:
  *         description: Internal server error
  */
-router.post("/background-image", (req, res) => {
-	// Single image upload, field name must match frontend FormData
-	uploadImage.single("backgroundImage")(req, res, (err) => {
-		// Handle any multer or custom upload errors
-		if (err) return handleUploadError(err, req, res);
+router.post(
+	"/background-image",
+	authenticateToken,
+	uploadImage.single("backgroundImage"),
+	async (req, res) => {
+		try {
+			if (!req.file) {
+				return res.status(400).json({
+					success: false,
+					message: "No file uploaded. Please select an image.",
+				});
+			}
 
-		// No file uploaded
-		if (!req.file) {
-			return res.status(400).json({
+			const user = await User.findById(req.user._id).exec();
+			if (!user) {
+				return res.status(404).json({
+					success: false,
+					message: "User not found",
+				});
+			}
+
+			user.backgroundImage = req.file.path; // Cloudinary URL
+			await user.save();
+
+			res.status(200).json({
+				success: true,
+				message: "Background image updated successfully",
+				backgroundImage: user.backgroundImage,
+			});
+		} catch (error) {
+			console.error("Upload background image error:", error);
+			res.status(500).json({
 				success: false,
-				error: "No file uploaded. Please select an image.",
+				message: "Internal server error",
 			});
 		}
-
-		// Success: send back Cloudinary URL
-		res.status(200).json({
-			success: true,
-			message: "Background image uploaded successfully",
-			image: req.file.path, // Cloudinary URL
-		});
-	});
-});
+	}
+);
 
 
 
@@ -738,16 +754,36 @@ router.post(
 	authenticateToken,
 	uploadImage.single("profilePicture"),
 	async (req, res) => {
-		if (!req.file) {
-			return res
-				.status(400)
-				.json({ success: false, message: "No file uploaded" });
+		try {
+			if (!req.file) {
+				return res
+					.status(400)
+					.json({ success: false, message: "No file uploaded" });
+			}
+
+			// Update user profilePicture field
+			const user = await User.findById(req.user._id).exec();
+			if (!user) {
+				return res
+					.status(404)
+					.json({ success: false, message: "User not found" });
+			}
+
+			user.profilePicture = req.file.path; // Cloudinary URL
+			await user.save();
+
+			res.json({
+				success: true,
+				message: "Profile picture updated successfully",
+				profilePicture: user.profilePicture,
+			});
+		} catch (error) {
+			console.error("Upload profile picture error:", error);
+			res.status(500).json({
+				success: false,
+				message: "Internal server error",
+			});
 		}
-		// Update user profilePicture field
-		const user = await User.findById(req.user._id).exec();
-		user.profilePicture = req.file.path;
-		await user.save();
-		res.json({ success: true, profilePicture: user.profilePicture });
 	}
 );
 /**
