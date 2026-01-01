@@ -237,12 +237,12 @@ router.get("/starred", authenticateToken, async (req, res) => {
 				chatId: chat._id,
 				user: otherUser
 					? {
-							_id: otherUser._id,
-							username: otherUser.username,
-							fullName: otherUser.fullName,
-							phoneNumber: otherUser.phoneNumber,
-							profilePicture: otherUser.profilePicture,
-					  }
+						_id: otherUser._id,
+						username: otherUser.username,
+						fullName: otherUser.fullName,
+						phoneNumber: otherUser.phoneNumber,
+						profilePicture: otherUser.profilePicture,
+					}
 					: null,
 				content: msg.content,
 				type: msg.type,
@@ -640,7 +640,7 @@ router.post(
 				type: "image",
 				content: {
 					media: {
-						url: `/uploads/${req.file.filename}`,
+						url: req.file.path,
 						filename: req.file.originalname,
 						mimeType: req.file.mimetype,
 						size: req.file.size,
@@ -717,6 +717,8 @@ router.post(
  *         description: Chat not found
  *       500:
  *         description: Internal server error
+ *       413:
+ *          description: File too large
  */
 router.post(
 	"/:chatId/upload-video",
@@ -756,7 +758,7 @@ router.post(
 				type: "video",
 				content: {
 					media: {
-						url: `/uploads/${req.file.filename}`,
+						url: req.file.path,
 						filename: req.file.originalname,
 						mimeType: req.file.mimetype,
 						size: req.file.size,

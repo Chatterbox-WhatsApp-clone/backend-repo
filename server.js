@@ -33,10 +33,10 @@ const io = socketIo(server, {
 });
 
 // Create uploads directory if it doesn't exist
-const uploadsDir = path.join(__dirname, "uploads");
-if (!fs.existsSync(uploadsDir)) {
-	fs.mkdirSync(uploadsDir, { recursive: true });
-}
+// const uploadsDir = path.join(__dirname, "uploads");
+// if (!fs.existsSync(uploadsDir)) {
+// 	fs.mkdirSync(uploadsDir, { recursive: true });
+// }
 
 // Import routes
 const authRoutes = require("./routes/auth");
@@ -104,7 +104,7 @@ app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
 // Serve uploaded files
-app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+// app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 // Swagger setup
 const PORT = process.env.PORT || 50001;

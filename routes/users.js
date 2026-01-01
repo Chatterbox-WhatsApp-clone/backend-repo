@@ -9,51 +9,10 @@ const Message = require("../models/Message");
 const Chat = require("../models/Chat");
 
 
-const multer = require("multer");
-const path = require("path");
-const fs = require("fs");
+const { uploadImage } = require("../middleware/upload");
+// Local storage config removed in favor of Cloudinary middleware
 
-// Profile picture directory
-const profilePicDir = path.join(__dirname, "../uploads/profilePics");
-if (!fs.existsSync(profilePicDir))
-	fs.mkdirSync(profilePicDir, { recursive: true });
-
-// Background image directory
-const backgroundDir = path.join(__dirname, "../uploads/backgrounds");
-if (!fs.existsSync(backgroundDir))
-	fs.mkdirSync(backgroundDir, { recursive: true });
-
-// Dynamic storage
-const storage = multer.diskStorage({
-	destination: function (req, file, cb) {
-		if (file.fieldname === "profilePicture") {
-			cb(null, profilePicDir);
-		} else if (file.fieldname === "backgroundImage") {
-			cb(null, backgroundDir);
-		} else {
-			cb(new Error("Unknown field"), false);
-		}
-	},
-	filename: function (req, file, cb) {
-		const ext = path.extname(file.originalname);
-		const uniqueName = Date.now() + "-" + Math.round(Math.random() * 1e9) + ext;
-		cb(null, uniqueName);
-	},
-});
-
-const upload = multer({
-	storage,
-	limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
-	fileFilter: (req, file, cb) => {
-		if (!file.mimetype.startsWith("image/")) {
-			cb(new Error("Only image files allowed!"), false);
-		} else {
-			cb(null, true);
-		}
-	},
-});
-
-module.exports = upload;
+// module.exports = upload; (Removed)
 
 
 /**
@@ -231,7 +190,7 @@ router.get("/me", authenticateToken, async (req, res) => {
 router.put(
 	"/profile",
 	authenticateToken,
-	upload.fields([
+	uploadImage.fields([
 		{ name: "profilePicture", maxCount: 1 },
 		{ name: "backgroundImage", maxCount: 1 },
 	]),
@@ -248,11 +207,11 @@ router.put(
 
 			// ✅ handle image uploads
 			if (req.files?.profilePicture?.[0]) {
-				user.profilePicture = `/uploads/profilePics/${req.files.profilePicture[0].filename}`;
+				user.profilePicture = req.files.profilePicture[0].path;
 			}
 
 			if (req.files?.backgroundImage?.[0]) {
-				user.backgroundImage = `/uploads/profilePics/${req.files.backgroundImage[0].filename}`;
+				user.backgroundImage = req.files.backgroundImage[0].path;
 			}
 
 			await user.save();
@@ -354,7 +313,7 @@ router.put(
 router.post(
 	"/background-image",
 	authenticateToken,
-	upload.single("backgroundImage"),
+	uploadImage.single("backgroundImage"),
 	async (req, res) => {
 		if (!req.file) {
 			return res
@@ -363,7 +322,7 @@ router.post(
 		}
 
 		const user = await User.findById(req.user._id);
-		user.backgroundImage = `/uploads/backgrounds/${req.file.filename}`;
+		user.backgroundImage = req.file.path;
 		await user.save();
 
 		res.json({
@@ -774,7 +733,7 @@ router.get("/online", authenticateToken, async (req, res) => {
 router.post(
 	"/profile-picture",
 	authenticateToken,
-	upload.single("profilePicture"),
+	uploadImage.single("profilePicture"),
 	async (req, res) => {
 		if (!req.file) {
 			return res
@@ -783,7 +742,7 @@ router.post(
 		}
 		// Update user profilePicture field
 		const user = await User.findById(req.user._id).exec();
-		user.profilePicture = `/uploads/profilePics/${req.file.filename}`;
+		user.profilePicture = req.file.path;
 		await user.save();
 		res.json({ success: true, profilePicture: user.profilePicture });
 	}

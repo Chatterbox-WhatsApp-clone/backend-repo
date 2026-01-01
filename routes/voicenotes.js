@@ -5,37 +5,8 @@ const fs = require('fs');
 
 const router = express.Router();
 
-// Ensure upload directory exists
-const uploadDir = path.join(__dirname, '../uploads/voicenotes');
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
-}
-
-// Multer storage setup
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, uploadDir);
-  },
-  filename: function (req, file, cb) {
-    // Use timestamp and original extension
-    const ext = path.extname(file.originalname);
-    const uniqueName = Date.now() + '-' + Math.round(Math.random() * 1E9) + ext;
-    cb(null, uniqueName);
-  }
-});
-
-const upload = multer({
-  storage: storage,
-  limits: { fileSize: 10 * 1024 * 1024 }, // Limit: 10MB
-  fileFilter: function (req, file, cb) {
-    // Accept only audio files
-    if (file.mimetype.startsWith('audio/')) {
-      cb(null, true);
-    } else {
-      cb(new Error('Only audio files are allowed!'), false);
-    }
-  }
-});
+const { uploadAudio } = require('../middleware/upload');
+// Local storage config removed
 
 /**
  * @swagger
@@ -71,14 +42,14 @@ const upload = multer({
  *         description: No file uploaded or invalid file
  */
 // POST /api/voicenotes - upload a voice note
-router.post('/', upload.single('voicenote'), (req, res) => {
+router.post('/', uploadAudio.single('voicenote'), (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: 'No file uploaded' });
   }
-  // Respond with file info (you can also save metadata in DB if needed)
+  // Respond with Cloudinary URL
   res.status(201).json({
-    filename: req.file.filename,
-    url: `/api/voicenotes/${req.file.filename}`
+    filename: req.file.filename, // This is the public_id in Cloudinary
+    url: req.file.path // Cloudinary URL
   });
 });
 
